@@ -1,0 +1,14 @@
+aiortc
+fastapi
+uvicorn[standard]
+uvloop
+mediapipe
+opencv-python
+numpy
+pykalman
+scipy-headless
+pykalman
+python-multipart
+scipy
+uvicorn
+uvloop

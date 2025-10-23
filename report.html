@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Proposal: AI Fitness Coach</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+            background-color: #f9f9f9;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h1 { font-size: 2.5em; }
+        h2 { font-size: 2em; margin-top: 40px; }
+        h3 { font-size: 1.5em; border-bottom: 1px solid #ccc; }
+        .container { background-color: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .arch-diagram {
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+            background-color: #fdfdfd;
+        }
+        .arch-box {
+            background-color: #ecf0f1;
+            border: 2px solid #bdc3c7;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 10px;
+            display: inline-block;
+            width: 200px;
+        }
+        .arrow {
+            font-size: 2em;
+            color: #3498db;
+            margin: 0 20px;
+            vertical-align: middle;
+        }
+        code {
+            background-color: #ecf0f1;
+            padding: 2px 5px;
+            border-radius: 4px;
+            font-family: "Courier New", Courier, monospace;
+        }
+        ul { list-style-type: disc; padding-left: 20px; }
+        li { margin-bottom: 10px; }
+        strong { color: #2980b9; }
+        .talking-points {
+            background-color: #f1f8ff;
+            border-left: 4px solid #3498db;
+            margin: 20px 0;
+            padding: 1px 20px;
+            border-radius: 4px;
+        }
+        details { cursor: pointer; }
+        summary { font-weight: bold; color: #2980b9; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Project Proposal: The AI Fitness Coach</h1>
+        <p><strong>Vision:</strong> To create an intelligent, real-time, and personalized fitness coaching application that leverages computer vision to provide users with immediate, actionable feedback on their exercise form, helping them achieve their fitness goals safely and effectively.</p>
+        <details>
+            <summary>Talking Points</summary>
+            <div class="talking-points">
+                <p>"Good morning, everyone. Today, I want to propose a new project that I believe sits at the intersection of health, technology, and artificial intelligence: a real-time, AI-powered Fitness Coach."</p>
+                <p>"The core idea is simple but powerful: imagine a personal trainer that can watch you work out through your webcam, count your reps, and give you immediate, corrective feedback on your form. This isn't about just recording a workout; it's about actively improving it, making fitness safer and more effective for everyone."</p>
+            </div>
+        </details>
+
+        <h2>System Architecture</h2>
+        <p>We propose a modern, real-time web application architecture composed of a lightweight frontend client and a powerful backend processing engine, communicating via a persistent, low-latency connection.</p>
+        <details>
+            <summary>Talking Points</summary>
+            <div class="talking-points">
+                <p>"To build this, I propose a robust and scalable architecture. At its heart, it's a client-server model designed for real-time communication."</p>
+                <p>"The <strong>Client</strong> will be a simple web application running in any modern browser. Its only job is to capture the user's video and display the feedback. This keeps the user's device requirements very low."</p>
+                <p>"The <strong>Server</strong> is where the magic happens. This will be our powerful backend, responsible for running the AI models that analyze the video stream and contain all of the coaching logic."</p>
+                <p>"The key to making this feel instant is the communication protocol. We'll use <strong>WebSockets</strong>, which give us a persistent, two-way connection. This is crucial for sending a high-fps video stream up and getting immediate feedback back down without the lag of traditional HTTP requests."</p>
+            </div>
+        </details>
+        <div class="arch-diagram">
+            <div class="arch-box">
+                <h3>Client (Browser)</h3>
+                <p>Captures webcam video and handles user interaction.</p>
+            </div>
+            <span class="arrow">&harr;</span>
+            <div class="arch-box">
+                <h3>Server (Backend)</h3>
+                <p>Performs real-time AI-powered pose estimation and coaching logic.</p>
+            </div>
+            <p><strong>Communication Protocol:</strong> A full-duplex <strong>WebSocket</strong> connection will be used for streaming video frames from the client to the server and sending coaching data back in real-time.</p>
+        </div>
+
+        <details>
+            <summary>Talking Points</summary>
+            <div class="talking-points">
+                <p>"To bring this architecture to life, I've selected a stack of modern, high-performance, and widely-supported open-source technologies. This approach minimizes licensing costs and maximizes our ability to find talent and community support."</p>
+                <p>"On the <strong>Frontend</strong>, we'll use <strong>React</strong>, the industry standard for building dynamic user interfaces. This gives us a solid foundation for creating a responsive and polished user experience."</p>
+                <p>"For the <strong>Backend</strong>, we'll use <strong>Python</strong>, the lingua franca of machine learning, with the <strong>FastAPI</strong> framework. FastAPI is incredibly fast and has excellent native support for the asynchronous operations our real-time WebSocket communication requires."</p>
+                <p>"And for the <strong>AI engine</strong> itself, we can leverage Google's <strong>MediaPipe</strong> framework. This is a game-changer. It gives us access to pre-trained, production-grade pose estimation models that are incredibly fast and accurate. This allows us to focus on building our unique coaching logic, rather than spending months developing our own computer vision models from scratch."</p>
+            </div>
+        </details>
+        <h2>Proposed Technology Stack</h2>
+        <p>To build this application, we will leverage a stack of modern, powerful, and open-source technologies:</p>
+        <ul>
+            <li><strong>Frontend:</strong>
+                <ul>
+                    <li><strong>React:</strong> A robust JavaScript library for building dynamic and responsive user interfaces.</li>
+                    <li><strong>Vite:</strong> A next-generation frontend tooling system for fast development and optimized builds.</li>
+                </ul>
+            </li>
+            <li><strong>Backend:</strong>
+                <ul>
+                    <li><strong>Python:</strong> The ideal language for machine learning and data processing.</li>
+                    <li><strong>FastAPI:</strong> A high-performance web framework for building APIs, with native support for asynchronous operations and WebSockets.</li>
+                </ul>
+            </li>
+            <li><strong>AI / Computer Vision:</strong>
+                <ul>
+                    <li><strong>MediaPipe:</strong> A cutting-edge, open-source framework from Google that provides pre-trained, highly optimized models for real-time human pose estimation.</li>
+                    <li><strong>OpenCV & NumPy:</strong> Essential Python libraries for handling image data and performing the mathematical calculations required for our coaching logic.</li>
+                </ul>
+            </li>
+        </ul>
+
+        <details>
+            <summary>Talking Points</summary>
+            <div class="talking-points">
+                <p>"I envision us building this project in a phased, agile approach. We can deliver a functional core product quickly and then iterate on it to add more intelligence and polish."</p>
+                <p>"In <strong>Phase 1</strong>, we build the backbone: the video pipeline and the skeleton visualization. This proves the core technology works."</p>
+                <p>"In <strong>Phase 2</strong>, we build the 'brain'. We translate the visual data into numbers—like joint angles—and implement the core logic for counting reps and providing simple form feedback. This gives us our minimum viable product: a coach that can count and correct."</p>
+                <p>"In <strong>Phase 3</strong>, we make the coach smart and personal. We introduce the interactive calibration phase, which is our key differentiator. The coach learns from the user, making the feedback truly personalized. We also enhance the UI with features like the color-coded feedback."</p>
+                <p>"Beyond that, the <strong>Future Horizons</strong> are incredibly exciting. We can expand our exercise library, add workout summaries, introduce audio coaching, and even build out user profiles to track long-term progress. The foundation we build in the first three phases will make all of this possible."</p>
+            </div>
+        </details>
+        <h2>Potential Features & Development Roadmap</h2>
+        <p>We can build this project in phases, delivering value at each stage and progressively adding more intelligence and polish.</p>
+        
+        <h3>Phase 1: Core Pose Estimation Pipeline</h3>
+        <p>The foundational goal is to create a system that can "see" and track the user. This involves streaming webcam data to the backend, performing pose estimation, and sending the landmark data back to be visualized as a real-time skeleton overlay.</p>
+
+        <h3>Phase 2: Intelligent Coaching Engine</h3>
+        <p>Once we have the raw landmark data, we can build the "brain" of our coach. This involves:
+            <ul>
+                <li><strong>Quantifying Movement:</strong> Calculating joint angles (e.g., for elbows and knees) from the landmark data.</li>
+                <li><strong>Repetition Counting:</strong> Implementing state machines to recognize and count full repetitions of an exercise (e.g., a bicep curl or a squat).</li>
+                <li><strong>Form Feedback:</strong> Creating a rules-based engine to provide real-time, actionable feedback on common mistakes (e.g., "Curl higher!", "Go deeper!").</li>
+            </ul>
+        </p>
+
+        <h3>Phase 3: Personalization & User Experience</h3>
+        <p>To make the coach truly effective, it must adapt to the individual. This phase focuses on personalization and usability:
+            <ul>
+                <li><strong>Interactive Calibration:</strong> A guided, two-step process where the app learns the user's personal range of motion for each exercise.</li>
+                <li><strong>Enhanced Visual Feedback:</strong> Making the skeleton change color (e.g., from green to red) to highlight the specific body parts related to a form mistake.</li>
+                <li><strong>Workout Loop:</strong> Allowing users to select an exercise, perform a set, and view a summary, creating a complete and repeatable workout experience.</li>
+            </ul>
+        </p>
+
+        <h3>Future Horizons: Advanced Features</h3>
+        <p>With the core application built, we can explore numerous exciting enhancements to increase engagement and value:</p>
+        <ul>
+            <li><strong>Workout Summaries & History:</strong> Providing users with detailed post-workout reports and tracking their progress over time.</li>
+            <li><strong>Expanded Exercise Library:</strong> Adding more complex exercises like lunges, overhead presses, and push-ups.</li>
+            <li><strong>Audio Coaching:</strong> Implementing text-to-speech to have the coach speak the feedback and count reps out loud.</li>
+            <li><strong>User Accounts & Gamification:</strong> Adding user profiles, achievements, and personal bests to create a more motivating and game-like experience.</li>
+        </ul>
+    </div>
+</body>
+</html>
