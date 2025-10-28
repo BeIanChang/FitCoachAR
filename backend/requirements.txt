@@ -2,11 +2,10 @@ aiortc
 fastapi
 uvicorn[standard]
 uvloop
-mediapipe
+mediapipe-silicon
 opencv-python
 numpy
 pykalman
-scipy-headless
 pykalman
 python-multipart
 scipy

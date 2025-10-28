@@ -22,7 +22,8 @@ This project implements the concepts from:
 ## 🏗️ Architecture
 
 ### Backend (Python/FastAPI)
-- **`main.py`**: WebSocket server handling real-time pose processing
+- **`pose_backends/`**: Pluggable pose-processing engines (MediaPipe 2D default, 3D-ready scaffold)
+- **`main.py`**: WebSocket server that streams frames to the active pose backend
 - **`kinematics.py`**: Body-relative frames, angular feature extraction, forward kinematics
 - **`llm_feedback.py`**: Template-based and API-driven natural language generation
 - **`filters.py`**: Kalman filtering for landmark smoothing
@@ -112,6 +113,28 @@ numpy
 pykalman
 scipy
 ```
+
+### Pose Backends
+The backend now loads pose processors dynamically. Configure via the `POSE_BACKEND`
+environment variable (defaults to `mediapipe_2d`):
+
+```bash
+export POSE_BACKEND=mediapipe_2d   # default 2.5D MediaPipe pipeline
+# or
+export POSE_BACKEND=mediapipe_3d   # MediaPipe world-landmark 3D pipeline
+# Optional (requires extra deps/config):
+export POSE_BACKEND=movenet_3d     # TensorFlow MoveNet 3D (needs MOVENET_3D_MODEL)
+export POSE_BACKEND=mmpose_poselifter  # MMPose PoseLifter (needs MMPOSE_CONFIG/MMPOSE_CHECKPOINT)
+uvicorn main:app --host 0.0.0.0 --port 8001 --reload
+```
+
+`GET /` reports the active backend plus all registered options so clients/frontends
+can react accordingly.
+
+> **Note:** `mediapipe_3d` shares the existing calibration logic and is ready to use.
+> The MoveNet and MMPose integrations are scaffolds—install their dependencies,
+> provide pre-trained models via the environment variables shown above, and
+> extend the decoding logic to map their outputs into the FitCoachAR payload.
 
 ### Frontend Setup
 ```bash

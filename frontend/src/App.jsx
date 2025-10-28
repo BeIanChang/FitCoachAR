@@ -3,6 +3,19 @@ import React, { useState, useEffect, useRef } from 'react';
 import AROverlay from './AROverlay';
 import './App.css';
 
+const EXERCISES = [
+  {
+    id: 'bicep_curls',
+    label: 'Bicep Curls',
+    description: 'Track elbow angles and tempo for stronger curls.'
+  },
+  {
+    id: 'squats',
+    label: 'Squats',
+    description: 'Monitor depth and knee alignment for safer squats.'
+  }
+];
+
 function App() {
   const [isMediaPipeReady, setIsMediaPipeReady] = useState(false);
   const [status, setStatus] = useState('Loading MediaPipe libraries...');
@@ -19,11 +32,15 @@ function App() {
   const [workoutSummary, setWorkoutSummary] = useState(null);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [countdown, setCountdown] = useState(null);
+  const [latencyMs, setLatencyMs] = useState(null);
+  const [roundTripMs, setRoundTripMs] = useState(null);
   const countdownIntervalId = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null); // For sending frames
   const ws = useRef(null);
   const frameSenderIntervalId = useRef(null);
+  const selectedExerciseRef = useRef(null);
+  const awaitingResponseRef = useRef(false);
 
   // Effect to check for MediaPipe libraries
   useEffect(() => {
@@ -44,9 +61,18 @@ function App() {
         setStatus('Connecting to server...');
         ws.current = new WebSocket('ws://localhost:8001/ws');
 
-        ws.current.onopen = () => setStatus('Connected. Starting camera...');
-        ws.current.onclose = () => setStatus('Disconnected.');
+        ws.current.onopen = () => {
+          setStatus('Connected. Starting camera...');
+          if (selectedExerciseRef.current) {
+            ws.current.send(JSON.stringify({ command: 'select_exercise', exercise: selectedExerciseRef.current }));
+          }
+        };
+        ws.current.onclose = () => {
+          awaitingResponseRef.current = false;
+          setStatus('Disconnected.');
+        };
         ws.current.onmessage = (event) => {
+          awaitingResponseRef.current = false;
           const data = JSON.parse(event.data);
 
           // Handle summary message
@@ -57,8 +83,22 @@ function App() {
 
           // Handle regular landmark and feedback messages
           if (data.landmarks) {
-            if (data.hasOwnProperty('curl_counter')) setRepCounter(data.curl_counter);
-            if (data.hasOwnProperty('squat_counter')) setRepCounter(data.squat_counter);
+            const currentExercise = selectedExerciseRef.current;
+            if (currentExercise === 'squats') {
+              if (data.hasOwnProperty('squat_counter')) setRepCounter(data.squat_counter);
+            } else {
+              if (data.hasOwnProperty('curl_counter')) {
+                setRepCounter(data.curl_counter);
+              } else if (data.hasOwnProperty('squat_counter')) {
+                // Fallback in case backend only sends squat counter
+                setRepCounter(data.squat_counter);
+              }
+            }
+            if (data.hasOwnProperty('latency_ms')) setLatencyMs(data.latency_ms);
+            if (data.hasOwnProperty('client_ts')) {
+              const rtt = performance.now() - data.client_ts;
+              if (Number.isFinite(rtt)) setRoundTripMs(rtt);
+            }
             if (data.left_knee_angle) setLeftKneeAngle(data.left_knee_angle.toFixed(2));
             if (data.right_knee_angle) setRightKneeAngle(data.right_knee_angle.toFixed(2));
             if (data.left_elbow_angle) setLeftElbowAngle(data.left_elbow_angle.toFixed(2));
@@ -103,9 +143,24 @@ function App() {
     }
   }, [isMediaPipeReady, appState]);
 
+  useEffect(() => {
+    selectedExerciseRef.current = selectedExercise;
+    if (
+      appState === 'workout' &&
+      selectedExercise &&
+      ws.current?.readyState === WebSocket.OPEN
+    ) {
+      ws.current.send(JSON.stringify({ command: 'select_exercise', exercise: selectedExercise }));
+    }
+  }, [selectedExercise, appState]);
+
   const startSendingFrames = () => {
+    awaitingResponseRef.current = false;
     setStatus('Camera running. Streaming frames...');
     frameSenderIntervalId.current = setInterval(() => {
+      if (awaitingResponseRef.current) {
+        return;
+      }
       if (ws.current?.readyState === WebSocket.OPEN && videoRef.current && canvasRef.current) {
         const video = videoRef.current;
         if (video.videoWidth === 0) return;
@@ -116,15 +171,43 @@ function App() {
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
         const frame = canvas.toDataURL('image/jpeg', 0.8);
         if (frame.length > 100) {
-          ws.current.send(frame);
+          try {
+            const payload = JSON.stringify({ frame, ts: performance.now() });
+            ws.current.send(payload);
+            awaitingResponseRef.current = true;
+          } catch (err) {
+            awaitingResponseRef.current = false;
+            console.error('Failed to send frame payload:', err);
+          }
         }
       }
     }, 1000 / 30);
   };
 
-  const startCalibration = (exercise) => {
+  const prepareForNewSession = (exercise) => {
     setSelectedExercise(exercise);
+    setWorkoutSummary(null);
+    setRepCounter(0);
+    setFeedbackMessage('');
+    setLlmFeedback('');
+    setFeedbackLandmarks([]);
+    setPoseLandmarks([]);
+    setLeftElbowAngle(null);
+    setRightElbowAngle(null);
+    setLeftKneeAngle(null);
+    setRightKneeAngle(null);
+    setLatencyMs(null);
+    setRoundTripMs(null);
+  };
+
+  const startCalibration = (exercise) => {
+    prepareForNewSession(exercise);
     setAppState('calibrating_down');
+  };
+
+  const startWorkoutWithoutCalibration = (exercise) => {
+    prepareForNewSession(exercise);
+    setAppState('workout');
   };
 
   const resetApp = () => {
@@ -132,10 +215,17 @@ function App() {
     setWorkoutSummary(null);
     setRepCounter(0);
     setFeedbackMessage('');
+    setLlmFeedback('');
     setLeftElbowAngle(null);
     setRightElbowAngle(null);
     setLeftKneeAngle(null);
     setRightKneeAngle(null);
+    setSelectedExercise(null);
+    setFeedbackLandmarks([]);
+    setPoseLandmarks([]);
+    setLatencyMs(null);
+    setRoundTripMs(null);
+    awaitingResponseRef.current = false;
   };
 
   const endWorkout = () => {
@@ -170,14 +260,32 @@ function App() {
       <h1>FitCoachAR</h1>
       <p className="subtitle">Real-Time Adaptive Exercise Coaching via Pose Estimation and AR Feedback</p>
       <p>Status: {status}</p>
+      {latencyMs !== null && <p>Backend latency: {latencyMs.toFixed(1)} ms</p>}
+      {roundTripMs !== null && <p>Total latency: {roundTripMs.toFixed(1)} ms</p>}
+      {latencyMs !== null && <p>Latency: {latencyMs.toFixed(1)} ms</p>}
 
       {!isMediaPipeReady && <div>Loading MediaPipe libraries...</div>}
 
       {isMediaPipeReady && appState === 'selection' && (
         <div className="exercise-selection">
           <h2>Select an Exercise</h2>
-          <button onClick={() => startCalibration('bicep_curls')}>Bicep Curls</button>
-          <button onClick={() => startCalibration('squats')}>Squats</button>
+          <p className="calibration-note">Calibration is optional—jump straight into a workout or capture personalized ranges first.</p>
+          <div className="exercise-grid">
+            {EXERCISES.map(exercise => (
+              <div key={exercise.id} className="exercise-card">
+                <h3>{exercise.label}</h3>
+                <p>{exercise.description}</p>
+                <div className="exercise-actions">
+                  <button className="secondary" onClick={() => startWorkoutWithoutCalibration(exercise.id)}>
+                    Start Workout
+                  </button>
+                  <button onClick={() => startCalibration(exercise.id)}>
+                    Calibrate First
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -225,7 +333,7 @@ function App() {
               autoPlay 
               playsInline 
               muted 
-              style={{ opacity: 0.3, width: '640px', height: '480px', position: 'absolute', left: 0, top: 0, zIndex: 1 }}
+              className="camera-feed"
             ></video>
             <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
             {/* 3D Avatar disabled - avatar.glb missing */}
@@ -276,7 +384,7 @@ function App() {
               autoPlay 
               playsInline 
               muted 
-              style={{ opacity: 0.3, width: '640px', height: '480px', position: 'absolute', left: 0, top: 0, zIndex: 1 }}
+              className="camera-feed"
             ></video>
             <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
             {/* 3D Avatar disabled - avatar.glb missing */}
