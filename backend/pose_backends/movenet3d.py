@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -23,6 +24,7 @@ class MoveNet3DBackend(PoseBackend):
     dimension_hint = "3D"
     BICEP_CANONICAL = {"extended": 160.0, "contracted": 30.0}
     SQUAT_CANONICAL = {"up": 160.0, "down": 50.0}
+    CALIBRATION_FREEZE_SECONDS = 2.0
 
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -52,6 +54,7 @@ class MoveNet3DBackend(PoseBackend):
 
         self.current_mode = "common"
         self.pending_calibration: Optional[Dict[str, Any]] = None
+        self.calibration_session: Optional[Dict[str, Any]] = None
         self.last_frame_bgr: Optional[np.ndarray] = None
         self._reset_state(reset_calibration=True)
         self.llm_feedback = LLMFeedbackGenerator(use_api=False)
@@ -195,6 +198,7 @@ class MoveNet3DBackend(PoseBackend):
             self.current_mode = mode
             if mode == "common":
                 self.pending_calibration = None
+                self.calibration_session = None
             active = store.get_active_record(exercise, mode)
             if active:
                 self._apply_record(active)
@@ -266,6 +270,91 @@ class MoveNet3DBackend(PoseBackend):
                 "exercise": exercise,
                 "deleted_id": record_id,
                 **summary,
+            }
+
+        if command == "start_auto_calibration":
+            self.calibration_session = {
+                "exercise": exercise,
+                "mode": self.current_mode,
+                "min_angle": None,
+                "max_angle": None,
+                "min_image": None,
+                "max_image": None,
+                "frozen": False,
+                "last_update": time.time(),
+            }
+            return {
+                "event": "calibration_started",
+                "exercise": exercise,
+                "mode": self.current_mode,
+            }
+
+        if command == "finalize_auto_calibration":
+            session = self.calibration_session
+            if not session or session.get("exercise") != exercise:
+                return {
+                    "event": "calibration_error",
+                    "message": "No active calibration session. Start a new calibration first.",
+                }
+            min_angle = session.get("min_angle")
+            max_angle = session.get("max_angle")
+            if min_angle is None or max_angle is None:
+                return {
+                    "event": "calibration_error",
+                    "message": "Not enough movement detected. Perform a few full reps, then finish.",
+                }
+
+            if exercise == "bicep_curls":
+                angles = {"extended": float(max_angle), "contracted": float(min_angle)}
+                canonical = self.BICEP_CANONICAL
+                eta = {
+                    "extended": (angles["extended"] - canonical["extended"]) / canonical["extended"],
+                    "contracted": (angles["contracted"] - canonical["contracted"]) / canonical["contracted"],
+                }
+                images = {
+                    "extended": session.get("max_image"),
+                    "contracted": session.get("min_image"),
+                }
+            else:
+                angles = {"up": float(max_angle), "down": float(min_angle)}
+                canonical = self.SQUAT_CANONICAL
+                eta = {
+                    "up": (angles["up"] - canonical["up"]) / canonical["up"],
+                    "down": (angles["down"] - canonical["down"]) / canonical["down"],
+                }
+                images = {
+                    "up": session.get("max_image"),
+                    "down": session.get("min_image"),
+                }
+
+            critic = store.get_critics(exercise)[self.current_mode]
+            record = new_record(
+                exercise=exercise,
+                mode=self.current_mode,
+                angles=angles,
+                eta=eta,
+                canonical=canonical,
+                critic=critic,
+                images=images,
+            )
+            store.add_record(record)
+            self.calibration_session = None
+            self._apply_record(record)
+            return {
+                "event": "calibration_complete",
+                "exercise": exercise,
+                "mode": self.current_mode,
+                "record": record.to_dict(),
+            }
+
+        if command == "cancel_calibration":
+            self.calibration_session = None
+            self.pending_calibration = None
+            self.current_mode = "common"
+            self._reset_state(reset_calibration=False)
+            return {
+                "event": "calibration_cancelled",
+                "exercise": exercise,
             }
 
         if command == "reset":
@@ -432,6 +521,7 @@ class MoveNet3DBackend(PoseBackend):
             self.arm_contracted_angle = getattr(self, "arm_contracted_angle", 30)
             self.squat_up_angle = getattr(self, "squat_up_angle", 160)
             self.squat_down_angle = getattr(self, "squat_down_angle", 50)
+        self.calibration_session = None
 
     def _process_landmarks(self, landmarks):
         right_shoulder = self._point(landmarks, "right_shoulder")
@@ -584,7 +674,7 @@ class MoveNet3DBackend(PoseBackend):
             for lm in landmarks
         ]
 
-        return {
+        data = {
             "landmarks": landmarks_payload,
             "left_elbow_angle": left_elbow_angle,
             "right_elbow_angle": right_elbow_angle,
@@ -598,6 +688,52 @@ class MoveNet3DBackend(PoseBackend):
             "kinematic_features": {},
             "backend": self.name,
         }
+
+        if self.calibration_session:
+            data["calibration_progress"] = {
+                "exercise": self.calibration_session.get("exercise"),
+                "mode": self.calibration_session.get("mode"),
+                "min_angle": self.calibration_session.get("min_angle"),
+                "max_angle": self.calibration_session.get("max_angle"),
+                "frozen": self.calibration_session.get("frozen", False),
+            }
+
+        return data
+
+    def _update_calibration_extremes(self, angle: float):
+        """Track min/max angles and snapshots during auto calibration."""
+        if angle <= 0:
+            return
+        session = self.calibration_session
+        if session is None:
+            return
+        if session.get("frozen"):
+            return
+
+        now = time.time()
+        if (
+            session.get("min_angle") is not None
+            and session.get("max_angle") is not None
+            and session.get("last_update")
+            and now - session["last_update"] > self.CALIBRATION_FREEZE_SECONDS
+        ):
+            session["frozen"] = True
+            self.calibration_session = session
+            return
+
+        updated = False
+        if session.get("min_angle") is None or angle < session["min_angle"]:
+            session["min_angle"] = angle
+            session["min_image"] = self._capture_snapshot()
+            updated = True
+        if session.get("max_angle") is None or angle > session["max_angle"]:
+            session["max_angle"] = angle
+            session["max_image"] = self._capture_snapshot()
+            updated = True
+
+        if updated:
+            session["last_update"] = now
+            self.calibration_session = session
 
     def _point(self, landmarks, name: str):
         idx = self.index[name]

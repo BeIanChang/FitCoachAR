@@ -45,7 +45,7 @@ function App() {
   const [llmFeedback, setLlmFeedback] = useState('');
   const [feedbackLandmarks, setFeedbackLandmarks] = useState([]);
   const [poseLandmarks, setPoseLandmarks] = useState([]); // State to hold landmarks for the 3D avatar
-  const [appState, setAppState] = useState('selection'); // 'selection', 'calibrating_down', 'calibrating_up', 'calibration_saving', 'workout', 'summary'
+  const [appState, setAppState] = useState('selection'); // 'selection', 'calibration_countdown', 'calibrating_live', 'calibration_saving', 'workout', 'summary'
   const [workoutSummary, setWorkoutSummary] = useState(null);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [countdown, setCountdown] = useState(null);
@@ -57,12 +57,12 @@ function App() {
   const [selectedRecordId, setSelectedRecordId] = useState(null);
   const [criticInputs, setCriticInputs] = useState({ common: '0.200', calibration: '0.200' });
   const [latestCalibration, setLatestCalibration] = useState(null);
+  const [calibrationProgress, setCalibrationProgress] = useState(null);
   const [showCalibrationManager, setShowCalibrationManager] = useState(false);
   const appModeRef = useRef(appMode);
   const showCalibrationManagerRef = useRef(showCalibrationManager);
   const selectedRecordIdRef = useRef(selectedRecordId);
   const countdownIntervalId = useRef(null);
-  const calibrationTimeoutId = useRef(null);
   const latestCalibrationRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null); // For sending frames
@@ -101,6 +101,8 @@ function App() {
     setRightKneeAngle(null);
     setLatencyMs(null);
     setRoundTripMs(null);
+    setCalibrationProgress(null);
+    setCountdown(null);
     awaitingResponseRef.current = false;
     setBackendName(null);
   }, []);
@@ -371,17 +373,16 @@ function App() {
             }
             return;
           }
-          if (eventType === 'calibration_stage') {
-            if (data.stage === 'extended') {
-              setStatus('Captured extended pose. Record contracted angle next.');
-            } else if (data.stage === 'up') {
-              setStatus('Captured standing pose. Record squat depth next.');
-            }
+          if (eventType === 'calibration_started') {
+            setStatus('Auto calibration running. Perform a few full reps.');
+            setCalibrationProgress(null);
+            setAppState('calibrating_live');
             return;
           }
           if (eventType === 'calibration_complete') {
             const exercise = data.exercise;
             const record = data.record;
+            setCalibrationProgress(null);
             if (record) {
               updateSummary(exercise, prev => {
                 const existing = prev.records.filter(r => r.id !== record.id);
@@ -410,8 +411,15 @@ function App() {
             return;
           }
           if (eventType === 'calibration_error') {
+            setCalibrationProgress(null);
             if (data.message) setStatus(`Calibration error: ${data.message}`);
             setAppState('selection');
+            return;
+          }
+          if (eventType === 'calibration_cancelled') {
+            setCalibrationProgress(null);
+            setAppState('selection');
+            setStatus('Calibration cancelled. Choose an action to continue.');
             return;
           }
           return;
@@ -450,6 +458,7 @@ function App() {
           if (data.feedback) setFeedbackMessage(data.feedback);
           if (data.llm_feedback) setLlmFeedback(data.llm_feedback);
           if (data.feedback_landmarks) setFeedbackLandmarks(data.feedback_landmarks);
+          if (data.calibration_progress) setCalibrationProgress(data.calibration_progress);
 
           // Update the pose landmarks for the 3D avatar
           setPoseLandmarks(data.landmarks);
@@ -474,7 +483,7 @@ function App() {
   // Manage camera lifecycle separately from the WebSocket
   useEffect(() => {
     if (!isMediaPipeReady) return;
-    const streamingStates = ['calibrating_down', 'calibrating_up', 'workout'];
+    const streamingStates = ['calibration_countdown', 'calibrating_live', 'workout'];
     const shouldStream = streamingStates.includes(appState);
 
     if (!shouldStream) {
@@ -506,13 +515,13 @@ function App() {
   useEffect(() => {
     return () => {
       clearInterval(frameSenderIntervalId.current);
+      if (countdownIntervalId.current) {
+        clearInterval(countdownIntervalId.current);
+        countdownIntervalId.current = null;
+      }
       if (videoRef.current?.srcObject) {
         videoRef.current.srcObject.getTracks().forEach(track => track.stop());
         videoRef.current.srcObject = null;
-      }
-      if (calibrationTimeoutId.current) {
-        clearTimeout(calibrationTimeoutId.current);
-        calibrationTimeoutId.current = null;
       }
     };
   }, []);
@@ -601,8 +610,27 @@ function App() {
     showCalibrationManagerRef.current = false;
     setShowCalibrationManager(false);
     sendCommand({ command: 'set_mode', mode: 'calibration', exercise });
-    setAppState('calibrating_down');
-    setStatus('Calibration: hold the prompted pose when the countdown finishes.');
+    setCalibrationProgress(null);
+    if (countdownIntervalId.current) {
+      clearInterval(countdownIntervalId.current);
+      countdownIntervalId.current = null;
+    }
+    let remaining = 5;
+    setCountdown(remaining);
+    setAppState('calibration_countdown');
+    setStatus('Calibration starts in 5 seconds. Get into your starting position.');
+    countdownIntervalId.current = setInterval(() => {
+      remaining -= 1;
+      setCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(countdownIntervalId.current);
+        countdownIntervalId.current = null;
+        setCountdown(null);
+        sendCommand({ command: 'start_auto_calibration', exercise });
+        setAppState('calibrating_live');
+        setStatus('Calibration: perform a few full reps. We will capture your extremes automatically.');
+      }
+    }, 1000);
   };
 
   const resetApp = () => {
@@ -627,11 +655,9 @@ function App() {
   };
 
   const cancelCalibration = useCallback(() => {
-    clearInterval(countdownIntervalId.current);
-    countdownIntervalId.current = null;
-    if (calibrationTimeoutId.current) {
-      clearTimeout(calibrationTimeoutId.current);
-      calibrationTimeoutId.current = null;
+    if (countdownIntervalId.current) {
+      clearInterval(countdownIntervalId.current);
+      countdownIntervalId.current = null;
     }
     setCountdown(null);
     if (!selectedExerciseRef.current) {
@@ -647,34 +673,18 @@ function App() {
     setAppState('selection');
     setStatus('Calibration cancelled. Choose an action to continue.');
     sendCommand({ command: 'set_mode', mode: 'common', exercise });
+    sendCommand({ command: 'cancel_calibration', exercise });
   }, [sendCommand]);
 
-  const recordCalibration = (step) => {
+  const finishCalibration = () => {
     const exercise = selectedExerciseRef.current;
     if (!exercise) {
-      setStatus('Select an exercise before capturing a calibration.');
+      setStatus('Select an exercise before finishing calibration.');
       return;
     }
-    setCountdown(3);
-    countdownIntervalId.current = setInterval(() => {
-      setCountdown(prev => prev - 1);
-    }, 1000);
-
-    if (calibrationTimeoutId.current) {
-      clearTimeout(calibrationTimeoutId.current);
-    }
-    calibrationTimeoutId.current = setTimeout(() => {
-      clearInterval(countdownIntervalId.current);
-      sendCommand({ command: `calibrate_${step}`, exercise });
-      if (step === 'down' || step === 'squat_up') {
-        setAppState('calibrating_up');
-      } else {
-        setAppState('calibration_saving');
-        setStatus('Saving calibration snapshot...');
-      }
-      setCountdown(null);
-      calibrationTimeoutId.current = null;
-    }, 3000);
+    setAppState('calibration_saving');
+    setStatus('Finishing calibration...');
+    sendCommand({ command: 'finalize_auto_calibration', exercise });
   };
 
   return (
@@ -924,42 +934,70 @@ function App() {
         </div>
       )}
 
-      {isMediaPipeReady && (appState === 'calibrating_down' || appState === 'calibrating_up') && (
+      {isMediaPipeReady && appState === 'calibration_countdown' && (
+        <>
+          <div className="calibration">
+            <h2>Calibrate: {selectedExercise === 'bicep_curls' ? 'Bicep Curl' : 'Squat'}</h2>
+            <p>Calibration starts in {countdown ?? 0} seconds. Get into your starting position.</p>
+            <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px', marginTop: '20px' }}>
+              <video 
+                ref={videoRef} 
+                onCanPlay={startSendingFrames}
+                autoPlay 
+                playsInline 
+                muted 
+                className="camera-feed"
+              ></video>
+              <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
+              {/* 3D Avatar disabled - avatar.glb missing */}
+              <AROverlay 
+                landmarks={poseLandmarks}
+                feedbackLandmarks={feedbackLandmarks}
+                selectedExercise={selectedExercise}
+                backend={backendName}
+                currentAngles={{
+                  rightElbow: rightElbowAngle ? parseFloat(rightElbowAngle) : 0,
+                  rightKnee: rightKneeAngle ? parseFloat(rightKneeAngle) : 0
+                }}
+                targetAngles={{
+                  rightElbow: 45,
+                  rightKnee: 90
+                }}
+              />
+            </div>
+          </div>
+          <div className="calibration-actions">
+            <button type="button" onClick={cancelCalibration} className="secondary-button">
+              Cancel Calibration
+            </button>
+          </div>
+        </>
+      )}
+
+      {isMediaPipeReady && appState === 'calibrating_live' && (
         <div className="calibration">
           <h2>Calibrate: {selectedExercise === 'bicep_curls' ? 'Bicep Curl' : 'Squat'}</h2>
-          {selectedExercise === 'bicep_curls' && (
-            appState === 'calibrating_down' ? (
-              <div>
-                <p><strong>Step 1:</strong> Extend your right arm fully downwards.</p>
-                <button onClick={() => recordCalibration('down')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Down Position'}
-                </button>
-              </div>
-            ) : (
-              <div>
-                <p><strong>Step 2:</strong> Now, perform a full curl and hold it at the top.</p>
-                <button onClick={() => recordCalibration('up')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Up Position'}
-                </button>
-              </div>
-            )
-          )}
-          {selectedExercise === 'squats' && (
-            appState === 'calibrating_down' ? (
-              <div>
-                <p><strong>Step 1:</strong> Stand up straight, feet shoulder-width apart.</p>
-                <button onClick={() => recordCalibration('squat_up')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Up Position'}
-                </button>
-              </div>
-            ) : (
-              <div>
-                <p><strong>Step 2:</strong> Now, go to your deepest squat and hold the position.</p>
-                <button onClick={() => recordCalibration('squat_down')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Down Position'}
-                </button>
-              </div>
-            )
+          <p>Perform a few full reps. We will detect your max and min angles automatically.</p>
+          {calibrationProgress && (
+            <div className="calibration-progress">
+              <p><strong>Detected range so far:</strong></p>
+              <ul>
+                {selectedExercise === 'bicep_curls' ? (
+                  <>
+                    <li>Extended (max): {calibrationProgress.max_angle ? calibrationProgress.max_angle.toFixed(1) : '—'}°</li>
+                    <li>Contracted (min): {calibrationProgress.min_angle ? calibrationProgress.min_angle.toFixed(1) : '—'}°</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Standing (max): {calibrationProgress.max_angle ? calibrationProgress.max_angle.toFixed(1) : '—'}°</li>
+                    <li>Deepest (min): {calibrationProgress.min_angle ? calibrationProgress.min_angle.toFixed(1) : '—'}°</li>
+                  </>
+                )}
+              </ul>
+              {calibrationProgress.frozen && (
+                <p className="calibration-note">Range locked. You can walk back to the screen and click Finish without affecting the captured angles.</p>
+              )}
+            </div>
           )}
           <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px', marginTop: '20px' }}>
             <video 
@@ -988,6 +1026,17 @@ function App() {
           />
         </div>
         <div className="calibration-actions">
+          <button
+            type="button"
+            onClick={finishCalibration}
+            disabled={
+              !calibrationProgress ||
+              calibrationProgress.min_angle === null ||
+              calibrationProgress.max_angle === null
+            }
+          >
+            Finish Calibration
+          </button>
           <button type="button" onClick={cancelCalibration} className="secondary-button">
             Cancel Calibration
           </button>
