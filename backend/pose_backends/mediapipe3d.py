@@ -57,6 +57,13 @@ class MediaPipe3DBackend(PoseBackend):
                 pose.RIGHT_KNEE.value,
                 pose.RIGHT_ANKLE.value,
             ]
+        if exercise in ("push_up", "lateral_raise", "barbell_row"):
+            return [
+                pose.RIGHT_SHOULDER.value,
+                pose.RIGHT_ELBOW.value,
+                pose.RIGHT_WRIST.value,
+                pose.RIGHT_HIP.value,
+            ]
         return [pose.RIGHT_SHOULDER.value, pose.RIGHT_ELBOW.value]
 
     def reset_state(self, reset_calibration: bool = False):
@@ -441,74 +448,94 @@ class MediaPipe3DBackend(PoseBackend):
             self.last_right_elbow_angle = right_elbow_angle
             self.last_right_knee_angle = right_knee_angle
 
-            if self.curl_state == "DOWN":
-                self.elbow_baseline_x = right_elbow_position_2d.x
-                if right_elbow_angle < (self.arm_contracted_angle + 20):
-                    self.curl_state = "UP"
-                feedback = ""
-            elif self.curl_state == "UP":
-                if right_elbow_angle > (self.arm_extended_angle - 20):
-                    self.curl_state = "DOWN"
-                    print("Registered curl rep")
-                    self.curl_counter += 1
-                    self.total_reps += 1
-                    feedback = ""
-                else:
-                    stability_threshold = (
-                        self.user_profile["upper_arm_length"] * 0.15
-                        if self.user_profile.get("upper_arm_length")
-                        else 0.05
-                    )
-                    if abs(right_elbow_position_2d.x - self.elbow_baseline_x) > stability_threshold:
-                        feedback = "Keep elbow stable!"
-                        self.mistake_counter["elbow_stability"] = (
-                            self.mistake_counter.get("elbow_stability", 0) + 1
-                        )
-                        feedback_landmarks = [
-                            mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
-                            mp_pose.PoseLandmark.RIGHT_ELBOW.value,
-                            mp_pose.PoseLandmark.RIGHT_WRIST.value,
-                        ]
-                    elif right_elbow_angle > (self.arm_contracted_angle + 20):
-                        feedback = "Curl higher!"
-                        self.mistake_counter["curl_depth"] = (
-                            self.mistake_counter.get("curl_depth", 0) + 1
-                        )
-                        feedback_landmarks = [
-                            mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
-                            mp_pose.PoseLandmark.RIGHT_ELBOW.value,
-                            mp_pose.PoseLandmark.RIGHT_WRIST.value,
-                        ]
-                    else:
-                        feedback = "Great curl!"
+            exercise = self.selected_exercise or "bicep_curls"
 
-            right_hip_y = image_landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y
-            right_knee_y = image_landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].y
+            # Upper-body reps mapped to curl_counter
+            if exercise in ("bicep_curls", "push_up", "lateral_raise", "barbell_row"):
+                if exercise == "lateral_raise":
+                    shoulder_y = image_landmarks[
+                        mp_pose.PoseLandmark.RIGHT_SHOULDER.value
+                    ].y
+                    wrist_y = image_landmarks[
+                        mp_pose.PoseLandmark.RIGHT_WRIST.value
+                    ].y
+                    in_up_position = wrist_y <= shoulder_y - 0.05
+                elif exercise == "barbell_row":
+                    in_up_position = right_elbow_angle < (self.arm_contracted_angle + 20)
+                else:  # bicep_curls or push_up
+                    in_up_position = right_elbow_angle < (self.arm_contracted_angle + 20)
 
-            if self.squat_state == "UP":
-                if right_knee_angle < (self.squat_down_angle + 20):
-                    self.squat_state = "DOWN"
-                if feedback not in ["Keep elbow stable!", "Curl higher!", "Great curl!"]:
+                if self.curl_state == "DOWN":
+                    self.elbow_baseline_x = right_elbow_position_2d.x
+                    if in_up_position:
+                        self.curl_state = "UP"
                     feedback = ""
-            elif self.squat_state == "DOWN":
-                if right_knee_angle > (self.squat_up_angle - 20):
-                    self.squat_state = "UP"
-                    self.squat_counter += 1
-                    self.total_reps += 1
-                    feedback = ""
-                else:
-                    if right_hip_y > right_knee_y:
-                        feedback = "Good depth!"
+                elif self.curl_state == "UP":
+                    in_down_position = right_elbow_angle > (self.arm_extended_angle - 20)
+                    if in_down_position:
+                        self.curl_state = "DOWN"
+                        print("Registered curl rep")
+                        self.curl_counter += 1
+                        self.total_reps += 1
+                        feedback = ""
                     else:
-                        feedback = "Go deeper!"
-                        self.mistake_counter["squat_depth"] = (
-                            self.mistake_counter.get("squat_depth", 0) + 1
+                        stability_threshold = (
+                            self.user_profile["upper_arm_length"] * 0.15
+                            if self.user_profile.get("upper_arm_length")
+                            else 0.05
                         )
-                        feedback_landmarks = [
-                            mp_pose.PoseLandmark.RIGHT_HIP.value,
-                            mp_pose.PoseLandmark.RIGHT_KNEE.value,
-                            mp_pose.PoseLandmark.RIGHT_ANKLE.value,
-                        ]
+                        if abs(right_elbow_position_2d.x - self.elbow_baseline_x) > stability_threshold:
+                            feedback = "Keep elbow stable!"
+                            self.mistake_counter["elbow_stability"] = (
+                                self.mistake_counter.get("elbow_stability", 0) + 1
+                            )
+                            feedback_landmarks = [
+                                mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
+                                mp_pose.PoseLandmark.RIGHT_ELBOW.value,
+                                mp_pose.PoseLandmark.RIGHT_WRIST.value,
+                            ]
+                        elif not in_up_position:
+                            feedback = "Reach full range!"
+                            self.mistake_counter["upper_rom"] = (
+                                self.mistake_counter.get("upper_rom", 0) + 1
+                            )
+                            feedback_landmarks = [
+                                mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
+                                mp_pose.PoseLandmark.RIGHT_ELBOW.value,
+                                mp_pose.PoseLandmark.RIGHT_WRIST.value,
+                            ]
+                        else:
+                            feedback = "Great curl!"
+
+            # Squat reps mapped to squat_counter
+            if exercise == "squats":
+                right_hip_y = image_landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value].y
+                right_knee_y = image_landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value].y
+
+                if self.squat_state == "UP":
+                    if right_knee_angle < (self.squat_down_angle + 20):
+                        self.squat_state = "DOWN"
+                    if feedback not in ["Keep elbow stable!", "Curl higher!", "Great curl!", "Reach full range!"]:
+                        feedback = ""
+                elif self.squat_state == "DOWN":
+                    if right_knee_angle > (self.squat_up_angle - 20):
+                        self.squat_state = "UP"
+                        self.squat_counter += 1
+                        self.total_reps += 1
+                        feedback = ""
+                    else:
+                        if right_hip_y > right_knee_y:
+                            feedback = "Good depth!"
+                        else:
+                            feedback = "Go deeper!"
+                            self.mistake_counter["squat_depth"] = (
+                                self.mistake_counter.get("squat_depth", 0) + 1
+                            )
+                            feedback_landmarks = [
+                                mp_pose.PoseLandmark.RIGHT_HIP.value,
+                                mp_pose.PoseLandmark.RIGHT_KNEE.value,
+                                mp_pose.PoseLandmark.RIGHT_ANKLE.value,
+                            ]
 
         angular_features = AngularFeatureExtractor.extract_all_features(smoothed_world)
 

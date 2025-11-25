@@ -171,7 +171,14 @@ class MoveNet3DBackend(PoseBackend):
                 self.index["right_knee"],
                 self.index["right_ankle"],
             ]
-        return [self.index["right_shoulder"], self.index["right_hip"]]
+        if exercise in ("push_up", "lateral_raise", "barbell_row"):
+            return [
+                self.index["right_shoulder"],
+                self.index["right_elbow"],
+                self.index["right_wrist"],
+                self.index["right_hip"],
+            ]
+        return [self.index["right_shoulder"], self.index["right_elbow"]]
 
     def handle_command(self, command_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         command = command_data.get("command")
@@ -487,69 +494,85 @@ class MoveNet3DBackend(PoseBackend):
             self.last_right_elbow_angle = right_elbow_angle
             self.last_right_knee_angle = right_knee_angle
 
-            if self.curl_state == "DOWN":
-                self.elbow_baseline_x = right_elbow_x
-                if right_elbow_angle < (self.arm_contracted_angle + 20):
-                    self.curl_state = "UP"
-                feedback = ""
-            elif self.curl_state == "UP":
-                if right_elbow_angle > (self.arm_extended_angle - 20):
-                    self.curl_state = "DOWN"
-                    self.curl_counter += 1
-                    self.total_reps += 1
-                    feedback = ""
-                else:
-                    stability_threshold = 0.05
-                    if abs(right_elbow_x - self.elbow_baseline_x) > stability_threshold:
-                        feedback = "Keep elbow stable!"
-                        self.mistake_counter["elbow_stability"] = (
-                            self.mistake_counter.get("elbow_stability", 0) + 1
-                        )
-                        feedback_landmarks = [
-                            self.index["right_shoulder"],
-                            self.index["right_elbow"],
-                            self.index["right_wrist"],
-                        ]
-                    elif right_elbow_angle > (self.arm_contracted_angle + 20):
-                        feedback = "Curl higher!"
-                        self.mistake_counter["curl_depth"] = (
-                            self.mistake_counter.get("curl_depth", 0) + 1
-                        )
-                        feedback_landmarks = [
-                            self.index["right_shoulder"],
-                            self.index["right_elbow"],
-                            self.index["right_wrist"],
-                        ]
-                    else:
-                        feedback = "Great curl!"
+            exercise = self.selected_exercise or "bicep_curls"
 
-            right_hip_y = landmarks[self.index["right_hip"]].y
-            right_knee_y = landmarks[self.index["right_knee"]].y
-
-            if self.squat_state == "UP":
-                if right_knee_angle < (self.squat_down_angle + 20):
-                    self.squat_state = "DOWN"
-                if feedback not in ["Keep elbow stable!", "Curl higher!", "Great curl!"]:
-                    feedback = ""
-            elif self.squat_state == "DOWN":
-                if right_knee_angle > (self.squat_up_angle - 20):
-                    self.squat_state = "UP"
-                    self.squat_counter += 1
-                    self.total_reps += 1
-                    feedback = ""
+            # Upper-body reps
+            if exercise in ("bicep_curls", "push_up", "lateral_raise", "barbell_row"):
+                if exercise == "lateral_raise":
+                    shoulder_y = landmarks[self.index["right_shoulder"]].y
+                    wrist_y = landmarks[self.index["right_wrist"]].y
+                    in_up_position = wrist_y <= shoulder_y - 0.05
+                elif exercise == "barbell_row":
+                    in_up_position = right_elbow_angle < (self.arm_contracted_angle + 20)
                 else:
-                    if right_hip_y > right_knee_y:
-                        feedback = "Good depth!"
+                    in_up_position = right_elbow_angle < (self.arm_contracted_angle + 20)
+
+                if self.curl_state == "DOWN":
+                    self.elbow_baseline_x = right_elbow_x
+                    if in_up_position:
+                        self.curl_state = "UP"
+                    feedback = ""
+                elif self.curl_state == "UP":
+                    in_down_position = right_elbow_angle > (self.arm_extended_angle - 20)
+                    if in_down_position:
+                        self.curl_state = "DOWN"
+                        self.curl_counter += 1
+                        self.total_reps += 1
+                        feedback = ""
                     else:
-                        feedback = "Go deeper!"
-                        self.mistake_counter["squat_depth"] = (
-                            self.mistake_counter.get("squat_depth", 0) + 1
-                        )
-                        feedback_landmarks = [
-                            self.index["right_hip"],
-                            self.index["right_knee"],
-                            self.index["right_ankle"],
-                        ]
+                        stability_threshold = 0.05
+                        if abs(right_elbow_x - self.elbow_baseline_x) > stability_threshold:
+                            feedback = "Keep elbow stable!"
+                            self.mistake_counter["elbow_stability"] = (
+                                self.mistake_counter.get("elbow_stability", 0) + 1
+                            )
+                            feedback_landmarks = [
+                                self.index["right_shoulder"],
+                                self.index["right_elbow"],
+                                self.index["right_wrist"],
+                            ]
+                        elif not in_up_position:
+                            feedback = "Reach full range!"
+                            self.mistake_counter["upper_rom"] = (
+                                self.mistake_counter.get("upper_rom", 0) + 1
+                            )
+                            feedback_landmarks = [
+                                self.index["right_shoulder"],
+                                self.index["right_elbow"],
+                                self.index["right_wrist"],
+                            ]
+                        else:
+                            feedback = "Great curl!"
+
+            # Squat reps
+            if exercise == "squats":
+                right_hip_y = landmarks[self.index["right_hip"]].y
+                right_knee_y = landmarks[self.index["right_knee"]].y
+
+                if self.squat_state == "UP":
+                    if right_knee_angle < (self.squat_down_angle + 20):
+                        self.squat_state = "DOWN"
+                    if feedback not in ["Keep elbow stable!", "Curl higher!", "Great curl!", "Reach full range!"]:
+                        feedback = ""
+                elif self.squat_state == "DOWN":
+                    if right_knee_angle > (self.squat_up_angle - 20):
+                        self.squat_state = "UP"
+                        self.squat_counter += 1
+                        self.total_reps += 1
+                        feedback = ""
+                    else:
+                        if right_hip_y > right_knee_y:
+                            feedback = "Good depth!"
+                        else:
+                            feedback = "Go deeper!"
+                            self.mistake_counter["squat_depth"] = (
+                                self.mistake_counter.get("squat_depth", 0) + 1
+                            )
+                            feedback_landmarks = [
+                                self.index["right_hip"],
+                                self.index["right_knee"],
+                                self.index["right_ankle"],
+                            ]
 
         llm_message = ""
         if feedback and feedback not in ["Adjust camera to show full body"]:
