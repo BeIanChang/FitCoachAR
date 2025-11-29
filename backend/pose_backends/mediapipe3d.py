@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, List, Optional
 
 import cv2
@@ -38,6 +39,7 @@ class MediaPipe3DBackend(PoseBackend):
         self.user_profile = {"upper_arm_length": None, "thigh_length": None}
         self.current_mode = "common"
         self.pending_calibration: Optional[Dict[str, Any]] = None
+        self.calibration_session: Optional[Dict[str, Any]] = None
         self.last_frame_bgr: Optional[np.ndarray] = None
         self.reset_state(reset_calibration=True)
         self._apply_active_calibration("bicep_curls")
@@ -99,9 +101,11 @@ class MediaPipe3DBackend(PoseBackend):
             self.squat_down_angle = getattr(self, "squat_down_angle", 50)
         self._apply_active_calibration("bicep_curls")
         self._apply_active_calibration("squats")
+        self.calibration_session = None
 
     BICEP_CANONICAL = {"extended": 160.0, "contracted": 30.0}
     SQUAT_CANONICAL = {"up": 160.0, "down": 50.0}
+    CALIBRATION_FREEZE_SECONDS = 2.0
 
     def _apply_active_calibration(self, exercise: str):
         record = store.get_active_record(exercise, self.current_mode)
@@ -223,6 +227,7 @@ class MediaPipe3DBackend(PoseBackend):
             self.current_mode = mode
             if mode == "common":
                 self.pending_calibration = None
+                self.calibration_session = None
             active = store.get_active_record(exercise, mode)
             if active:
                 self._apply_record(active)
@@ -293,6 +298,91 @@ class MediaPipe3DBackend(PoseBackend):
                 "exercise": exercise,
                 "deleted_id": record_id,
                 **summary,
+            }
+
+        if command == "start_auto_calibration":
+            self.calibration_session = {
+                "exercise": exercise,
+                "mode": self.current_mode,
+                "min_angle": None,
+                "max_angle": None,
+                "min_image": None,
+                "max_image": None,
+                "frozen": False,
+                "last_update": time.time(),
+            }
+            return {
+                "event": "calibration_started",
+                "exercise": exercise,
+                "mode": self.current_mode,
+            }
+
+        if command == "finalize_auto_calibration":
+            session = self.calibration_session
+            if not session or session.get("exercise") != exercise:
+                return {
+                    "event": "calibration_error",
+                    "message": "No active calibration session. Start a new calibration first.",
+                }
+            min_angle = session.get("min_angle")
+            max_angle = session.get("max_angle")
+            if min_angle is None or max_angle is None:
+                return {
+                    "event": "calibration_error",
+                    "message": "Not enough movement detected. Perform a few full reps, then finish.",
+                }
+
+            if exercise == "bicep_curls":
+                angles = {"extended": float(max_angle), "contracted": float(min_angle)}
+                canonical = self.BICEP_CANONICAL
+                eta = {
+                    "extended": (angles["extended"] - canonical["extended"]) / canonical["extended"],
+                    "contracted": (angles["contracted"] - canonical["contracted"]) / canonical["contracted"],
+                }
+                images = {
+                    "extended": session.get("max_image"),
+                    "contracted": session.get("min_image"),
+                }
+            else:
+                angles = {"up": float(max_angle), "down": float(min_angle)}
+                canonical = self.SQUAT_CANONICAL
+                eta = {
+                    "up": (angles["up"] - canonical["up"]) / canonical["up"],
+                    "down": (angles["down"] - canonical["down"]) / canonical["down"],
+                }
+                images = {
+                    "up": session.get("max_image"),
+                    "down": session.get("min_image"),
+                }
+
+            critic = store.get_critics(exercise)[self.current_mode]
+            record = new_record(
+                exercise=exercise,
+                mode=self.current_mode,
+                angles=angles,
+                eta=eta,
+                canonical=canonical,
+                critic=critic,
+                images=images,
+            )
+            store.add_record(record)
+            self.calibration_session = None
+            self._apply_record(record)
+            return {
+                "event": "calibration_complete",
+                "exercise": exercise,
+                "mode": self.current_mode,
+                "record": record.to_dict(),
+            }
+
+        if command == "cancel_calibration":
+            self.calibration_session = None
+            self.pending_calibration = None
+            self.current_mode = "common"
+            self.reset_state(reset_calibration=False)
+            return {
+                "event": "calibration_cancelled",
+                "exercise": exercise,
             }
 
         if command == "calibrate_down":
@@ -537,6 +627,14 @@ class MediaPipe3DBackend(PoseBackend):
                                 mp_pose.PoseLandmark.RIGHT_ANKLE.value,
                             ]
 
+        if self.calibration_session and self.calibration_session.get("exercise") == (
+            self.selected_exercise or "bicep_curls"
+        ):
+            if self.selected_exercise == "bicep_curls":
+                self._update_calibration_extremes(right_elbow_angle)
+            elif self.selected_exercise == "squats":
+                self._update_calibration_extremes(right_knee_angle)
+
         angular_features = AngularFeatureExtractor.extract_all_features(smoothed_world)
 
         llm_message = ""
@@ -589,8 +687,52 @@ class MediaPipe3DBackend(PoseBackend):
             "backend": self.name,
         }
 
+        if self.calibration_session:
+            data_to_send["calibration_progress"] = {
+                "exercise": self.calibration_session.get("exercise"),
+                "mode": self.calibration_session.get("mode"),
+                "min_angle": self.calibration_session.get("min_angle"),
+                "max_angle": self.calibration_session.get("max_angle"),
+                "frozen": self.calibration_session.get("frozen", False),
+            }
+
         self.last_payload = data_to_send
         return data_to_send
 
     def close(self) -> None:
         self.holistic.close()
+
+    def _update_calibration_extremes(self, angle: float):
+        """Track min/max angles and snapshots during auto calibration."""
+        if angle <= 0:
+            return
+        session = self.calibration_session
+        if session is None:
+            return
+        if session.get("frozen"):
+            return
+
+        now = time.time()
+        if (
+            session.get("min_angle") is not None
+            and session.get("max_angle") is not None
+            and session.get("last_update")
+            and now - session["last_update"] > self.CALIBRATION_FREEZE_SECONDS
+        ):
+            session["frozen"] = True
+            self.calibration_session = session
+            return
+
+        updated = False
+        if session.get("min_angle") is None or angle < session["min_angle"]:
+            session["min_angle"] = angle
+            session["min_image"] = self._capture_snapshot()
+            updated = True
+        if session.get("max_angle") is None or angle > session["max_angle"]:
+            session["max_angle"] = angle
+            session["max_image"] = self._capture_snapshot()
+            updated = True
+
+        if updated:
+            session["last_update"] = now
+            self.calibration_session = session

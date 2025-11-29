@@ -41,12 +41,21 @@ function App() {
   const [leftKneeAngle, setLeftKneeAngle] = useState(null);
   const [rightKneeAngle, setRightKneeAngle] = useState(null);
   const [repCounter, setRepCounter] = useState(0);
+  const repCounterRef = useRef(repCounter);
+  const lastErrorRep = useRef(-1);
+  const [errorReps, setErrorReps] = useState(0);
+  const [repTimestamps, setRepTimestamps] = useState([]);
+  const [repDurations, setRepDurations] = useState([]);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [llmFeedback, setLlmFeedback] = useState('');
   const [feedbackLandmarks, setFeedbackLandmarks] = useState([]);
   const [poseLandmarks, setPoseLandmarks] = useState([]); // State to hold landmarks for the 3D avatar
-  const [appState, setAppState] = useState('selection'); // 'selection', 'calibrating_down', 'calibrating_up', 'calibration_saving', 'workout', 'summary'
+  const [appState, setAppState] = useState('selection'); // 'selection', 'calibration_countdown', 'calibrating_live', 'calibration_saving', 'workout', 'summary'
   const [workoutSummary, setWorkoutSummary] = useState(null);
+  const workoutSummaryRef = useRef(workoutSummary);
+  const [llmSummary, setLlmSummary] = useState('');
+  const [chatHistory, setChatHistory] = useState([]);
+  const [isLlmLoading, setIsLlmLoading] = useState(false);
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [latencyMs, setLatencyMs] = useState(null);
@@ -57,12 +66,12 @@ function App() {
   const [selectedRecordId, setSelectedRecordId] = useState(null);
   const [criticInputs, setCriticInputs] = useState({ common: '0.200', calibration: '0.200' });
   const [latestCalibration, setLatestCalibration] = useState(null);
+  const [calibrationProgress, setCalibrationProgress] = useState(null);
   const [showCalibrationManager, setShowCalibrationManager] = useState(false);
   const appModeRef = useRef(appMode);
   const showCalibrationManagerRef = useRef(showCalibrationManager);
   const selectedRecordIdRef = useRef(selectedRecordId);
   const countdownIntervalId = useRef(null);
-  const calibrationTimeoutId = useRef(null);
   const latestCalibrationRef = useRef(null);
   const videoRef = useRef(null);
   const canvasRef = useRef(null); // For sending frames
@@ -91,6 +100,9 @@ function App() {
   const resetMetrics = useCallback(() => {
     setWorkoutSummary(null);
     setRepCounter(0);
+    setErrorReps(0);
+    setRepTimestamps([]);
+    setRepDurations([]);
     setFeedbackMessage('');
     setLlmFeedback('');
     setFeedbackLandmarks([]);
@@ -101,6 +113,8 @@ function App() {
     setRightKneeAngle(null);
     setLatencyMs(null);
     setRoundTripMs(null);
+    setCalibrationProgress(null);
+    setCountdown(null);
     awaitingResponseRef.current = false;
     setBackendName(null);
   }, []);
@@ -198,6 +212,10 @@ function App() {
   useEffect(() => {
     latestCalibrationRef.current = latestCalibration;
   }, [latestCalibration]);
+
+  useEffect(() => {
+    repCounterRef.current = repCounter;
+  }, [repCounter]);
 
   // Effect to check for MediaPipe libraries
   useEffect(() => {
@@ -371,17 +389,16 @@ function App() {
             }
             return;
           }
-          if (eventType === 'calibration_stage') {
-            if (data.stage === 'extended') {
-              setStatus('Captured extended pose. Record contracted angle next.');
-            } else if (data.stage === 'up') {
-              setStatus('Captured standing pose. Record squat depth next.');
-            }
+          if (eventType === 'calibration_started') {
+            setStatus('Auto calibration running. Perform a few full reps.');
+            setCalibrationProgress(null);
+            setAppState('calibrating_live');
             return;
           }
           if (eventType === 'calibration_complete') {
             const exercise = data.exercise;
             const record = data.record;
+            setCalibrationProgress(null);
             if (record) {
               updateSummary(exercise, prev => {
                 const existing = prev.records.filter(r => r.id !== record.id);
@@ -410,8 +427,15 @@ function App() {
             return;
           }
           if (eventType === 'calibration_error') {
+            setCalibrationProgress(null);
             if (data.message) setStatus(`Calibration error: ${data.message}`);
             setAppState('selection');
+            return;
+          }
+          if (eventType === 'calibration_cancelled') {
+            setCalibrationProgress(null);
+            setAppState('selection');
+            setStatus('Calibration cancelled. Choose an action to continue.');
             return;
           }
           return;
@@ -419,7 +443,15 @@ function App() {
 
         // Handle summary message
         if (data.summary) {
-          setWorkoutSummary(data.summary);
+          const fullSummary = {
+            total_reps: 0,
+            success_rate: 0,
+            mistakes: {},
+            avg_tempo: 0,
+            exercise: selectedExerciseRef.current || '',
+            ...data.summary, // Overwrite defaults with any fields from the backend
+          };
+          setWorkoutSummary(fullSummary);
           return; // Stop processing after handling summary
         }
 
@@ -447,9 +479,18 @@ function App() {
           if (data.right_knee_angle) setRightKneeAngle(data.right_knee_angle.toFixed(2));
           if (data.left_elbow_angle) setLeftElbowAngle(data.left_elbow_angle.toFixed(2));
           if (data.right_elbow_angle) setRightElbowAngle(data.right_elbow_angle.toFixed(2));
-          if (data.feedback) setFeedbackMessage(data.feedback);
+          if (data.feedback) {
+            setFeedbackMessage(data.feedback);
+            const isError = !['perfect', 'great', 'good', 'keep going'].some(positiveWord => data.feedback.toLowerCase().includes(positiveWord));
+            if (isError && repCounterRef.current > 0 && lastErrorRep.current !== repCounterRef.current) {
+              setErrorReps(prev => prev + 1);
+              lastErrorRep.current = repCounterRef.current;
+            }
+          }
           if (data.llm_feedback) setLlmFeedback(data.llm_feedback);
           if (data.feedback_landmarks) setFeedbackLandmarks(data.feedback_landmarks);
+          if (data.calibration_progress) setCalibrationProgress(data.calibration_progress);
+          if (data.rep_timestamps) setRepTimestamps(data.rep_timestamps);
 
           // Update the pose landmarks for the 3D avatar
           setPoseLandmarks(data.landmarks);
@@ -474,7 +515,7 @@ function App() {
   // Manage camera lifecycle separately from the WebSocket
   useEffect(() => {
     if (!isMediaPipeReady) return;
-    const streamingStates = ['calibrating_down', 'calibrating_up', 'workout'];
+    const streamingStates = ['calibration_countdown', 'calibrating_live', 'workout'];
     const shouldStream = streamingStates.includes(appState);
 
     if (!shouldStream) {
@@ -506,13 +547,13 @@ function App() {
   useEffect(() => {
     return () => {
       clearInterval(frameSenderIntervalId.current);
+      if (countdownIntervalId.current) {
+        clearInterval(countdownIntervalId.current);
+        countdownIntervalId.current = null;
+      }
       if (videoRef.current?.srcObject) {
         videoRef.current.srcObject.getTracks().forEach(track => track.stop());
         videoRef.current.srcObject = null;
-      }
-      if (calibrationTimeoutId.current) {
-        clearTimeout(calibrationTimeoutId.current);
-        calibrationTimeoutId.current = null;
       }
     };
   }, []);
@@ -601,8 +642,27 @@ function App() {
     showCalibrationManagerRef.current = false;
     setShowCalibrationManager(false);
     sendCommand({ command: 'set_mode', mode: 'calibration', exercise });
-    setAppState('calibrating_down');
-    setStatus('Calibration: hold the prompted pose when the countdown finishes.');
+    setCalibrationProgress(null);
+    if (countdownIntervalId.current) {
+      clearInterval(countdownIntervalId.current);
+      countdownIntervalId.current = null;
+    }
+    let remaining = 5;
+    setCountdown(remaining);
+    setAppState('calibration_countdown');
+    setStatus('Calibration starts in 5 seconds. Get into your starting position.');
+    countdownIntervalId.current = setInterval(() => {
+      remaining -= 1;
+      setCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(countdownIntervalId.current);
+        countdownIntervalId.current = null;
+        setCountdown(null);
+        sendCommand({ command: 'start_auto_calibration', exercise });
+        setAppState('calibrating_live');
+        setStatus('Calibration: perform a few full reps. We will capture your extremes automatically.');
+      }
+    }, 1000);
   };
 
   const resetApp = () => {
@@ -619,19 +679,109 @@ function App() {
     setShowCalibrationManager(false);
   };
 
+  const calculateRepDurations = (timestamps) => {
+    if (timestamps.length < 2) return [];
+    const durations = [];
+    for (let i = 1; i < timestamps.length; i++) {
+      durations.push(timestamps[i] - timestamps[i - 1]);
+    }
+    return durations;
+  };
+
+  const calculateAverageTempo = (durations) => {
+    if (durations.length === 0) return 0;
+    const sum = durations.reduce((a, b) => a + b, 0);
+    return sum / durations.length;
+  };
+
   const endWorkout = () => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ command: 'reset' }));
     }
+    // Create a complete summary object from the current state
+    const durations = calculateRepDurations(repTimestamps);
+    const avgTempo = calculateAverageTempo(durations);
+
+    const successRate = repCounter > 0 ? (repCounter - errorReps) / repCounter : 0.0;
+    const finalSummary = {
+      total_reps: repCounter,
+      success_rate: successRate,
+      mistakes: { 'errors_detected': errorReps },
+      avg_tempo: avgTempo,
+      rep_durations: durations, // Add individual rep durations
+      exercise: selectedExerciseRef.current
+    };
+
+    // Set the summary state and ref for the current session
+    setWorkoutSummary(finalSummary);
+    workoutSummaryRef.current = finalSummary;
     setAppState('summary');
+
+    // Call backend services with the final summary data
+    fetchLlmSummary(finalSummary);
+    saveWorkoutData(finalSummary);
+  };
+
+  const saveWorkoutData = async (sessionData) => {
+    if (!sessionData.exercise) return;
+    try {
+      await fetch('http://localhost:8001/save_workout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sessionData)
+      });
+    } catch (error) {
+      console.error('Failed to save workout data:', error);
+    }
+  };
+
+  const fetchLlmSummary = async (sessionData) => {
+    if (!sessionData.exercise) return;
+    setIsLlmLoading(true);
+    try {
+      const response = await fetch('http://localhost:8001/summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sessionData)
+      });
+      const data = await response.json();
+      setLlmSummary(data.summary);
+      setChatHistory([]); // Reset chat history for the new summary
+    } catch (error) {
+      console.error('Failed to fetch LLM summary:', error);
+      setLlmSummary('Could not load AI summary. Please try again.');
+    } finally {
+      setIsLlmLoading(false);
+    }
+  };
+
+  const handleAskQuestion = async (question) => {
+    if (!question.trim() || !workoutSummaryRef.current) return;
+
+    const newChatHistory = [...chatHistory, { role: 'user', content: question }];
+    setChatHistory(newChatHistory);
+    setIsLlmLoading(true);
+
+    try {
+      const response = await fetch('http://localhost:8001/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_data: workoutSummaryRef.current, question })
+      });
+      const data = await response.json();
+      setChatHistory([...newChatHistory, { role: 'assistant', content: data.answer }]);
+    } catch (error) {
+      console.error('Failed to get answer from LLM:', error);
+      setChatHistory([...newChatHistory, { role: 'assistant', content: 'Sorry, I had trouble getting an answer. Please try again.' }]);
+    } finally {
+      setIsLlmLoading(false);
+    }
   };
 
   const cancelCalibration = useCallback(() => {
-    clearInterval(countdownIntervalId.current);
-    countdownIntervalId.current = null;
-    if (calibrationTimeoutId.current) {
-      clearTimeout(calibrationTimeoutId.current);
-      calibrationTimeoutId.current = null;
+    if (countdownIntervalId.current) {
+      clearInterval(countdownIntervalId.current);
+      countdownIntervalId.current = null;
     }
     setCountdown(null);
     if (!selectedExerciseRef.current) {
@@ -647,34 +797,18 @@ function App() {
     setAppState('selection');
     setStatus('Calibration cancelled. Choose an action to continue.');
     sendCommand({ command: 'set_mode', mode: 'common', exercise });
+    sendCommand({ command: 'cancel_calibration', exercise });
   }, [sendCommand]);
 
-  const recordCalibration = (step) => {
+  const finishCalibration = () => {
     const exercise = selectedExerciseRef.current;
     if (!exercise) {
-      setStatus('Select an exercise before capturing a calibration.');
+      setStatus('Select an exercise before finishing calibration.');
       return;
     }
-    setCountdown(3);
-    countdownIntervalId.current = setInterval(() => {
-      setCountdown(prev => prev - 1);
-    }, 1000);
-
-    if (calibrationTimeoutId.current) {
-      clearTimeout(calibrationTimeoutId.current);
-    }
-    calibrationTimeoutId.current = setTimeout(() => {
-      clearInterval(countdownIntervalId.current);
-      sendCommand({ command: `calibrate_${step}`, exercise });
-      if (step === 'down' || step === 'squat_up') {
-        setAppState('calibrating_up');
-      } else {
-        setAppState('calibration_saving');
-        setStatus('Saving calibration snapshot...');
-      }
-      setCountdown(null);
-      calibrationTimeoutId.current = null;
-    }, 3000);
+    setAppState('calibration_saving');
+    setStatus('Finishing calibration...');
+    sendCommand({ command: 'finalize_auto_calibration', exercise });
   };
 
   return (
@@ -924,42 +1058,70 @@ function App() {
         </div>
       )}
 
-      {isMediaPipeReady && (appState === 'calibrating_down' || appState === 'calibrating_up') && (
+      {isMediaPipeReady && appState === 'calibration_countdown' && (
+        <>
+          <div className="calibration">
+            <h2>Calibrate: {selectedExercise === 'bicep_curls' ? 'Bicep Curl' : 'Squat'}</h2>
+            <p>Calibration starts in {countdown ?? 0} seconds. Get into your starting position.</p>
+            <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px', marginTop: '20px' }}>
+              <video 
+                ref={videoRef} 
+                onCanPlay={startSendingFrames}
+                autoPlay 
+                playsInline 
+                muted 
+                className="camera-feed"
+              ></video>
+              <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
+              {/* 3D Avatar disabled - avatar.glb missing */}
+              <AROverlay 
+                landmarks={poseLandmarks}
+                feedbackLandmarks={feedbackLandmarks}
+                selectedExercise={selectedExercise}
+                backend={backendName}
+                currentAngles={{
+                  rightElbow: rightElbowAngle ? parseFloat(rightElbowAngle) : 0,
+                  rightKnee: rightKneeAngle ? parseFloat(rightKneeAngle) : 0
+                }}
+                targetAngles={{
+                  rightElbow: 45,
+                  rightKnee: 90
+                }}
+              />
+            </div>
+          </div>
+          <div className="calibration-actions">
+            <button type="button" onClick={cancelCalibration} className="secondary-button">
+              Cancel Calibration
+            </button>
+          </div>
+        </>
+      )}
+
+      {isMediaPipeReady && appState === 'calibrating_live' && (
         <div className="calibration">
           <h2>Calibrate: {selectedExercise === 'bicep_curls' ? 'Bicep Curl' : 'Squat'}</h2>
-          {selectedExercise === 'bicep_curls' && (
-            appState === 'calibrating_down' ? (
-              <div>
-                <p><strong>Step 1:</strong> Extend your right arm fully downwards.</p>
-                <button onClick={() => recordCalibration('down')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Down Position'}
-                </button>
-              </div>
-            ) : (
-              <div>
-                <p><strong>Step 2:</strong> Now, perform a full curl and hold it at the top.</p>
-                <button onClick={() => recordCalibration('up')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Up Position'}
-                </button>
-              </div>
-            )
-          )}
-          {selectedExercise === 'squats' && (
-            appState === 'calibrating_down' ? (
-              <div>
-                <p><strong>Step 1:</strong> Stand up straight, feet shoulder-width apart.</p>
-                <button onClick={() => recordCalibration('squat_up')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Up Position'}
-                </button>
-              </div>
-            ) : (
-              <div>
-                <p><strong>Step 2:</strong> Now, go to your deepest squat and hold the position.</p>
-                <button onClick={() => recordCalibration('squat_down')} disabled={countdown !== null}>
-                  {countdown !== null ? `Recording in ${countdown}...` : 'Record Down Position'}
-                </button>
-              </div>
-            )
+          <p>Perform a few full reps. We will detect your max and min angles automatically.</p>
+          {calibrationProgress && (
+            <div className="calibration-progress">
+              <p><strong>Detected range so far:</strong></p>
+              <ul>
+                {selectedExercise === 'bicep_curls' ? (
+                  <>
+                    <li>Extended (max): {calibrationProgress.max_angle ? calibrationProgress.max_angle.toFixed(1) : '—'}°</li>
+                    <li>Contracted (min): {calibrationProgress.min_angle ? calibrationProgress.min_angle.toFixed(1) : '—'}°</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Standing (max): {calibrationProgress.max_angle ? calibrationProgress.max_angle.toFixed(1) : '—'}°</li>
+                    <li>Deepest (min): {calibrationProgress.min_angle ? calibrationProgress.min_angle.toFixed(1) : '—'}°</li>
+                  </>
+                )}
+              </ul>
+              {calibrationProgress.frozen && (
+                <p className="calibration-note">Range locked. You can walk back to the screen and click Finish without affecting the captured angles.</p>
+              )}
+            </div>
           )}
           <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px', marginTop: '20px' }}>
             <video 
@@ -988,30 +1150,37 @@ function App() {
           />
         </div>
         <div className="calibration-actions">
+          <button
+            type="button"
+            onClick={finishCalibration}
+            disabled={
+              !calibrationProgress ||
+              calibrationProgress.min_angle === null ||
+              calibrationProgress.max_angle === null
+            }
+          >
+            Finish Calibration
+          </button>
           <button type="button" onClick={cancelCalibration} className="secondary-button">
             Cancel Calibration
           </button>
         </div>
       </div>
     )}
+      {isMediaPipeReady && appState === 'summary' && (
+        <LLMFeedback
+          summary={llmSummary}
+          chatHistory={chatHistory}
+          isLoading={isLlmLoading}
+          onAskQuestion={handleAskQuestion}
+          onReset={resetApp}
+        />
+      )}
+
       {isMediaPipeReady && appState === 'calibration_saving' && (
         <div className="calibration">
           <h2>Finishing Calibration</h2>
           <p>Processing snapshots and saving your deviation parameters...</p>
-        </div>
-      )}
-
-      {isMediaPipeReady && appState === 'summary' && workoutSummary && (
-        <div className="summary-screen">
-          <h2>Workout Summary</h2>
-          <p>Total Reps: <strong>{workoutSummary.total_reps}</strong></p>
-          <h3>Common Mistakes:</h3>
-          <ul>
-            {Object.entries(workoutSummary.mistakes).map(([mistake, count]) => (
-              <li key={mistake}>{`${mistake.replace('_', ' ')}: ${count} times`}</li>
-            ))}
-          </ul>
-          <button onClick={resetApp}>Done</button>
         </div>
       )}
 
@@ -1065,6 +1234,59 @@ function App() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset }) {
+  const [question, setQuestion] = useState('');
+  const chatContainerRef = useRef(null);
+
+  useEffect(() => {
+    // Scroll to the bottom of the chat window when new messages are added
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+    }
+  }, [chatHistory]);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    onAskQuestion(question);
+    setQuestion('');
+  };
+
+  return (
+    <div className="llm-feedback-container">
+      <h2>AI Coach Summary</h2>
+      <div className="summary-card">
+        {isLoading && !summary ? <p>Generating your summary...</p> : <p>{summary}</p>}
+      </div>
+
+      <h3>Ask the Coach</h3>
+      <div className="chat-window">
+        <div className="chat-history" ref={chatContainerRef}>
+          {chatHistory.map((msg, index) => (
+            <div key={index} className={`chat-message ${msg.role}`}>
+              <p><strong>{msg.role === 'user' ? 'You' : 'Coach'}:</strong> {msg.content}</p>
+            </div>
+          ))}
+          {isLoading && chatHistory.length > 0 && (
+            <div className="chat-message assistant"><p><i>Coach is typing...</i></p></div>
+          )}
+        </div>
+        <form onSubmit={handleSubmit} className="chat-input-form">
+          <input
+            type="text"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder="Ask a question about your form..."
+            disabled={isLoading}
+          />
+          <button type="submit" disabled={isLoading}>Send</button>
+        </form>
+      </div>
+
+      <button onClick={onReset} className="primary-button">Finish Review</button>
     </div>
   );
 }

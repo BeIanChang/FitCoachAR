@@ -55,6 +55,12 @@ class MMPosePoseLifterBackend(PoseBackend):
 
     def handle_command(self, command_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """PoseLifter backend currently does not support calibration commands."""
+        command = command_data.get("command")
+        if command in {"start_auto_calibration", "finalize_auto_calibration", "cancel_calibration"}:
+            return {
+                "event": "calibration_error",
+                "message": "Auto calibration is not supported for the PoseLifter backend.",
+            }
         return None
 
     def process_frame(self, frame_bgr: np.ndarray) -> Optional[Dict[str, Any]]:

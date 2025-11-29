@@ -10,7 +10,11 @@ import numpy as np
 import uvloop
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Dict
+from datetime import datetime
 
+from llm_feedback import LLMFeedbackGenerator
 from pose_backends import build_pose_backend, get_available_backends
 
 # Install and use uvloop as the default event loop
@@ -22,6 +26,26 @@ logger = logging.getLogger(__name__)
 POSE_BACKEND_NAME = os.getenv("POSE_BACKEND", "mediapipe_2d")
 
 app = FastAPI()
+
+WORKOUTS_DIR = "workouts"
+if not os.path.exists(WORKOUTS_DIR):
+    os.makedirs(WORKOUTS_DIR)
+
+# --- LLM Integration ---
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "csk-pe9ve2dc58528hxp34jwd4v8jk426t4mk9223my3j3k6ej5c")
+llm_generator = LLMFeedbackGenerator(use_api=True, api_key=CEREBRAS_API_KEY)
+
+class SessionData(BaseModel):
+    total_reps: int
+    success_rate: float
+    mistakes: Dict[str, int]
+    avg_tempo: float
+    exercise: str
+
+class AskRequest(BaseModel):
+    session_data: SessionData
+    question: str
+# ----------------------
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +63,33 @@ def read_root():
         "pose_backend": POSE_BACKEND_NAME,
         "available_backends": get_available_backends(),
     }
+
+
+@app.post("/summary")
+async def get_summary(session_data: SessionData):
+    summary = llm_generator.generate_session_summary(session_data.dict())
+    return {"summary": summary}
+
+
+@app.post("/ask")
+async def ask_question(request: AskRequest):
+    answer = llm_generator.answer_question(request.session_data.dict(), request.question)
+    return {"answer": answer}
+
+
+@app.post("/save_workout")
+async def save_workout(session_data: SessionData):
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{session_data.exercise}_{timestamp}.json"
+        filepath = os.path.join(WORKOUTS_DIR, filename)
+
+        with open(filepath, "w") as f:
+            json.dump(session_data.dict(), f, indent=4)
+
+        return {"status": "success", "message": f"Workout saved to {filepath}"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.websocket("/ws")
