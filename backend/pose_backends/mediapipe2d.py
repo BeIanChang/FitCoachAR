@@ -212,6 +212,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
 
         self.landmarks = None
         self.total_reps = 0
+        self.rep_timestamps: List[float] = []
         self.mistake_counter: Dict[str, int] = {}
 
         if reset_calibration:
@@ -628,6 +629,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 if right_elbow_angle > (self.arm_extended_angle - 20):
                     self.curl_state = "DOWN"
                     self.curl_counter += 1
+                    self.rep_timestamps.append(time.time())
                     print("rep counted")
                     self.total_reps += 1
                     feedback = ""
@@ -672,6 +674,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 if right_knee_angle > (self.squat_up_angle - 20):
                     self.squat_state = "UP"
                     self.squat_counter += 1
+                    self.rep_timestamps.append(time.time())
                     self.total_reps += 1
                     feedback = ""
                 else:
@@ -733,6 +736,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
             "right_elbow_angle": right_elbow_angle,
             "curl_counter": self.curl_counter,
             "squat_counter": self.squat_counter,
+            "rep_timestamps": self.rep_timestamps,
             "left_knee_angle": left_knee_angle,
             "right_knee_angle": right_knee_angle,
             "feedback": feedback,

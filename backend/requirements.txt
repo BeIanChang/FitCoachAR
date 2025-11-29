@@ -12,3 +12,4 @@ scipy
 uvicorn
 uvloop
 requests
+cerebras-cloud-sdk

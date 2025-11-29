@@ -7,7 +7,10 @@ natural, coach-like feedback from quantitative error data.
 """
 
 import json
+import os
 from typing import Dict, List
+
+from cerebras.cloud.sdk import Cerebras
 
 
 class LLMFeedbackGenerator:
@@ -72,7 +75,12 @@ class LLMFeedbackGenerator:
             api_key: API key for LLM service (e.g., OpenAI)
         """
         self.use_api = use_api
-        self.api_key = api_key
+        self.api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
+        self.client = None
+        if self.use_api:
+            if not self.api_key:
+                raise ValueError("Cerebras API key not found. Please provide it as an argument or set the CEREBRAS_API_KEY environment variable.")
+            self.client = Cerebras(api_key=self.api_key)
         self.call_count = 0
         self.template_index = {}
     
@@ -187,9 +195,24 @@ Avoid jargon or negative wording. Keep responses under 15 words."""
 
 Provide 1-2 short sentences of actionable, positive feedback."""
         
-        # TODO: Implement actual API call
-        # For now, fall back to template
-        return self._generate_from_template(error_record)
+        if not self.client:
+            return self._generate_from_template(error_record)
+
+        try:
+            completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model="llama-3.3-70b",
+                max_completion_tokens=50,
+                temperature=0.2,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Error calling Cerebras API: {e}")
+            # Fallback to template if API fails
+            return self._generate_from_template(error_record)
     
     def generate_session_summary(self, session_data: Dict) -> str:
         """
@@ -235,4 +258,71 @@ Provide 1-2 short sentences of actionable, positive feedback."""
         # Encouragement
         summary_parts.append("Your consistency is improving—keep it up! 💪")
         
-        return " ".join(summary_parts)
+        if self.use_api and self.client:
+            return self._generate_summary_with_api(session_data)
+        else:
+            return " ".join(summary_parts)
+
+    def _generate_summary_with_api(self, session_data: Dict) -> str:
+        """
+        Generate a session summary using the Cerebras LLM API.
+        """
+        system_prompt = """You are a friendly and encouraging fitness coach summarizing a workout session.
+Provide a concise summary (3-4 sentences) that highlights achievements and gives one key area for improvement.
+Start with a positive opening, mention the total reps and form accuracy, point out the most common mistake as a constructive tip, and end with motivation.
+Format the output as a single paragraph."""
+
+        user_prompt = f"""Here is the data for my {session_data.get('exercise', 'workout')} session. Please give me a summary:
+{json.dumps(session_data, indent=2)}"""
+
+        try:
+            completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model="llama-3.3-70b",
+                max_completion_tokens=200,
+                temperature=0.3,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Error calling Cerebras API for summary: {e}")
+            # Fallback to template summary if API fails
+            return self.generate_session_summary(session_data) # Calls the non-api version
+
+    def answer_question(self, session_data, question: str) -> str:
+        """
+        Answer a user's question about their workout session using the LLM.
+
+        Args:
+            session_data: The data from the user's workout session.
+            question: The user's question.
+
+        Returns:
+            A natural language answer from the LLM.
+        """
+        if not self.use_api or not self.client:
+            return "I can only answer questions when connected to the AI coach. Please check the configuration."
+
+        system_prompt = """You are a knowledgeable and conversational fitness coach. A user has a question after their workout.
+- First, answer the user's question directly and concisely.
+- If their question is about their workout performance, use the provided workout data to give a supportive and helpful answer with actionable advice.
+- If their question is a simple greeting or off-topic, provide a friendly, brief response and gently guide the conversation back to their fitness goals if appropriate. Do not analyze their workout data unless they ask about it."""
+
+        user_prompt = f"""Here is my workout data:\n{json.dumps(session_data, indent=2)}\n\nMy question is: {question}"""
+
+        try:
+            completion = self.client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                model="llama-3.3-70b",
+                max_completion_tokens=150,
+                temperature=0.2,
+            )
+            return completion.choices[0].message.content.strip()
+        except Exception as e:
+            print(f"Error calling Cerebras API for Q&A: {e}")
+            return "I'm having trouble connecting to the AI coach right now. Please try again in a moment."
