@@ -409,3 +409,105 @@
 .summary-screen button:hover {
   background: #2563eb;
 }
+
+/* --- LLM Feedback and Chat --- */
+.llm-feedback-container {
+  max-width: 800px;
+  margin: 2rem auto;
+  padding: 2rem;
+  background-color: #2c2c2c;
+  border-radius: 8px;
+  border: 1px solid #444;
+}
+
+.llm-feedback-container h2, .llm-feedback-container h3 {
+  color: #00aaff;
+  border-bottom: 2px solid #00aaff;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.summary-card {
+  background-color: #333;
+  padding: 1.5rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  font-style: italic;
+  color: #e0e0e0;
+  border-left: 4px solid #00aaff;
+}
+
+.chat-window {
+  background-color: #1e1e1e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.chat-history {
+  height: 200px;
+  overflow-y: auto;
+  margin-bottom: 1rem;
+  padding-right: 10px; /* For scrollbar */
+}
+
+.chat-message {
+  margin-bottom: 1rem;
+}
+
+.chat-message p {
+  margin: 0;
+  padding: 0.75rem;
+  border-radius: 8px;
+  line-height: 1.5;
+}
+
+.chat-message.user p {
+  background-color: #005f88;
+  color: #fff;
+  text-align: right;
+}
+
+.chat-message.assistant p {
+  background-color: #3a3a3a;
+  color: #e0e0e0;
+}
+
+.chat-input-form {
+  display: flex;
+}
+
+.chat-input-form input {
+  flex-grow: 1;
+  padding: 0.75rem;
+  border: 1px solid #555;
+  border-radius: 4px 0 0 4px;
+  background-color: #2c2c2c;
+  color: #fff;
+}
+
+.chat-input-form button {
+  padding: 0.75rem 1.5rem;
+  border: none;
+  background-color: #0077cc;
+  color: white;
+  cursor: pointer;
+  border-radius: 0 4px 4px 0;
+  transition: background-color 0.2s;
+}
+
+.chat-input-form button:hover {
+  background-color: #005f88;
+}
+
+.chat-input-form button:disabled {
+  background-color: #555;
+  cursor: not-allowed;
+}
+
+.llm-feedback-container .primary-button {
+  width: 100%;
+  padding: 1rem;
+  font-size: 1.2rem;
+}
