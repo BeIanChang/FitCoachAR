@@ -150,6 +150,13 @@ def evaluate_video_with_backend(
     last_result: Dict[str, object] = {}
     elbow_series: List[float] = []
     knee_series: List[float] = []
+    shl_series: List[float] = []
+    rshl_rpalm_series: List[float] = []
+    rshl_rhip_series: List[float] = []
+    rpalm_rhip_series: List[float] = []
+    rknee_rhip_series: List[float] = []
+    rknee_rfeet_series: List[float] = []
+    rhip_rfeet_series: List[float] = []
 
     while True:
         ok, frame = cap.read()
@@ -175,6 +182,42 @@ def evaluate_video_with_backend(
             try:
                 if "right_knee_angle" in result and result["right_knee_angle"] is not None:  # type: ignore[index]
                     knee_series.append(float(result["right_knee_angle"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            # Collect distance metrics when available
+            try:
+                if "metric_shl_dist" in result and result["metric_shl_dist"] is not None:  # type: ignore[index]
+                    shl_series.append(float(result["metric_shl_dist"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "metric_rshl_rpalm" in result and result["metric_rshl_rpalm"] is not None:  # type: ignore[index]
+                    rshl_rpalm_series.append(float(result["metric_rshl_rpalm"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "metric_rshl_rhip" in result and result["metric_rshl_rhip"] is not None:  # type: ignore[index]
+                    rshl_rhip_series.append(float(result["metric_rshl_rhip"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "metric_rpalm_rhip" in result and result["metric_rpalm_rhip"] is not None:  # type: ignore[index]
+                    rpalm_rhip_series.append(float(result["metric_rpalm_rhip"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "metric_rknee_rhip" in result and result["metric_rknee_rhip"] is not None:  # type: ignore[index]
+                    rknee_rhip_series.append(float(result["metric_rknee_rhip"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "metric_rknee_rfeet" in result and result["metric_rknee_rfeet"] is not None:  # type: ignore[index]
+                    rknee_rfeet_series.append(float(result["metric_rknee_rfeet"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "metric_rhip_rfeet" in result and result["metric_rhip_rfeet"] is not None:  # type: ignore[index]
+                    rhip_rfeet_series.append(float(result["metric_rhip_rfeet"]))  # type: ignore[arg-type]
             except Exception:
                 pass
 
@@ -206,6 +249,13 @@ def evaluate_video_with_backend(
 
     elbow_mean, elbow_std, elbow_mean_abs_delta = summarize(elbow_series)
     knee_mean, knee_std, knee_mean_abs_delta = summarize(knee_series)
+    shl_mean, shl_std, shl_mean_abs_delta = summarize(shl_series)
+    rshl_rpalm_mean, rshl_rpalm_std, rshl_rpalm_mean_abs_delta = summarize(rshl_rpalm_series)
+    rshl_rhip_mean, rshl_rhip_std, rshl_rhip_mean_abs_delta = summarize(rshl_rhip_series)
+    rpalm_rhip_mean, rpalm_rhip_std, rpalm_rhip_mean_abs_delta = summarize(rpalm_rhip_series)
+    rknee_rhip_mean, rknee_rhip_std, rknee_rhip_mean_abs_delta = summarize(rknee_rhip_series)
+    rknee_rfeet_mean, rknee_rfeet_std, rknee_rfeet_mean_abs_delta = summarize(rknee_rfeet_series)
+    rhip_rfeet_mean, rhip_rfeet_std, rhip_rfeet_mean_abs_delta = summarize(rhip_rfeet_series)
 
     return {
         "video": str(meta.path),
@@ -225,6 +275,27 @@ def evaluate_video_with_backend(
         "knee_mean": knee_mean,
         "knee_std": knee_std,
         "knee_mean_abs_delta": knee_mean_abs_delta,
+        "shl_mean": shl_mean,
+        "shl_std": shl_std,
+        "shl_mean_abs_delta": shl_mean_abs_delta,
+        "rshl_rpalm_mean": rshl_rpalm_mean,
+        "rshl_rpalm_std": rshl_rpalm_std,
+        "rshl_rpalm_mean_abs_delta": rshl_rpalm_mean_abs_delta,
+        "rshl_rhip_mean": rshl_rhip_mean,
+        "rshl_rhip_std": rshl_rhip_std,
+        "rshl_rhip_mean_abs_delta": rshl_rhip_mean_abs_delta,
+        "rpalm_rhip_mean": rpalm_rhip_mean,
+        "rpalm_rhip_std": rpalm_rhip_std,
+        "rpalm_rhip_mean_abs_delta": rpalm_rhip_mean_abs_delta,
+        "rknee_rhip_mean": rknee_rhip_mean,
+        "rknee_rhip_std": rknee_rhip_std,
+        "rknee_rhip_mean_abs_delta": rknee_rhip_mean_abs_delta,
+        "rknee_rfeet_mean": rknee_rfeet_mean,
+        "rknee_rfeet_std": rknee_rfeet_std,
+        "rknee_rfeet_mean_abs_delta": rknee_rfeet_mean_abs_delta,
+        "rhip_rfeet_mean": rhip_rfeet_mean,
+        "rhip_rfeet_std": rhip_rfeet_std,
+        "rhip_rfeet_mean_abs_delta": rhip_rfeet_mean_abs_delta,
     }
 
 
@@ -298,6 +369,27 @@ def main() -> None:
         "knee_mean",
         "knee_std",
         "knee_mean_abs_delta",
+        "shl_mean",
+        "shl_std",
+        "shl_mean_abs_delta",
+        "rshl_rpalm_mean",
+        "rshl_rpalm_std",
+        "rshl_rpalm_mean_abs_delta",
+        "rshl_rhip_mean",
+        "rshl_rhip_std",
+        "rshl_rhip_mean_abs_delta",
+        "rpalm_rhip_mean",
+        "rpalm_rhip_std",
+        "rpalm_rhip_mean_abs_delta",
+        "rknee_rhip_mean",
+        "rknee_rhip_std",
+        "rknee_rhip_mean_abs_delta",
+        "rknee_rfeet_mean",
+        "rknee_rfeet_std",
+        "rknee_rfeet_mean_abs_delta",
+        "rhip_rfeet_mean",
+        "rhip_rfeet_std",
+        "rhip_rfeet_mean_abs_delta",
     ]
     with args.output_csv.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)

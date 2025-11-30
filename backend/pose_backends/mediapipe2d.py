@@ -717,6 +717,18 @@ class MediaPipe2DPoseBackend(PoseBackend):
                                 mp_pose.PoseLandmark.RIGHT_ANKLE.value,
                             ]
 
+        # Distance-based metrics (for analysis / signal-based counting)
+        shl_dx = shoulder_left[0] - shoulder_right[0]
+        shl_dy = shoulder_left[1] - shoulder_right[1]
+        shl_dist = float((shl_dx ** 2 + shl_dy ** 2) ** 0.5)
+
+        rshl_rpalm_dist = float(shoulder_right[1] - wrist_right[1])
+        rshl_rhip_dist = float(hip_right[1] - shoulder_right[1])
+        rpalm_rhip_dist = float(wrist_right[1] - hip_right[1])
+        rknee_rhip_dist = float(knee_right[1] - hip_right[1])
+        rknee_rfeet_dist = float(ankle_right[1] - knee_right[1])
+        rhip_rfeet_dist = float(ankle_right[1] - hip_right[1])
+
         # Update auto-calibration session with new extremes.
         if self.calibration_session and self.calibration_session.get("exercise") == (
             self.selected_exercise or "bicep_curls"
@@ -765,6 +777,14 @@ class MediaPipe2DPoseBackend(PoseBackend):
             "rep_timestamps": self.rep_timestamps,
             "left_knee_angle": left_knee_angle,
             "right_knee_angle": right_knee_angle,
+            # Distance metrics (2D, image-space)
+            "metric_shl_dist": shl_dist,
+            "metric_rshl_rpalm": rshl_rpalm_dist,
+            "metric_rshl_rhip": rshl_rhip_dist,
+            "metric_rpalm_rhip": rpalm_rhip_dist,
+            "metric_rknee_rhip": rknee_rhip_dist,
+            "metric_rknee_rfeet": rknee_rfeet_dist,
+            "metric_rhip_rfeet": rhip_rfeet_dist,
             "feedback": feedback,
             "llm_feedback": llm_message,
             "feedback_landmarks": feedback_landmarks,

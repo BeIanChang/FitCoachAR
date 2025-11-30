@@ -14,8 +14,8 @@ from pydantic import BaseModel
 from typing import Dict
 from datetime import datetime
 
-from llm_feedback import LLMFeedbackGenerator
-from pose_backends import build_pose_backend, get_available_backends
+from .llm_feedback import LLMFeedbackGenerator
+from .pose_backends import build_pose_backend, get_available_backends
 
 # Install and use uvloop as the default event loop
 uvloop.install()

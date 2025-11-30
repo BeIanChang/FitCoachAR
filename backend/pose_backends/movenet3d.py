@@ -664,6 +664,25 @@ class MoveNet3DBackend(PoseBackend):
                                 self.index["right_ankle"],
                             ]
 
+        # Distance metrics on right side (MoveNet-normalized coordinates)
+        rs = self._point(landmarks, "right_shoulder")
+        ls = self._point(landmarks, "left_shoulder")
+        rh = self._point(landmarks, "right_hip")
+        rk = self._point(landmarks, "right_knee")
+        ra = self._point(landmarks, "right_ankle")
+        rw = self._point(landmarks, "right_wrist")
+
+        shl_dx = ls[0] - rs[0]
+        shl_dy = ls[1] - rs[1]
+        shl_dist = float((shl_dx ** 2 + shl_dy ** 2) ** 0.5)
+
+        rshl_rpalm_dist = float(rs[1] - rw[1])
+        rshl_rhip_dist = float(rh[1] - rs[1])
+        rpalm_rhip_dist = float(rw[1] - rh[1])
+        rknee_rhip_dist = float(rk[1] - rh[1])
+        rknee_rfeet_dist = float(ra[1] - rk[1])
+        rhip_rfeet_dist = float(ra[1] - rh[1])
+
         llm_message = ""
         if feedback and feedback not in ["Adjust camera to show full body"]:
             error_record = {
@@ -705,6 +724,13 @@ class MoveNet3DBackend(PoseBackend):
             "squat_counter": self.squat_counter,
             "left_knee_angle": left_knee_angle,
             "right_knee_angle": right_knee_angle,
+            "metric_shl_dist": shl_dist,
+            "metric_rshl_rpalm": rshl_rpalm_dist,
+            "metric_rshl_rhip": rshl_rhip_dist,
+            "metric_rpalm_rhip": rpalm_rhip_dist,
+            "metric_rknee_rhip": rknee_rhip_dist,
+            "metric_rknee_rfeet": rknee_rfeet_dist,
+            "metric_rhip_rfeet": rhip_rfeet_dist,
             "feedback": feedback,
             "llm_feedback": llm_message,
             "feedback_landmarks": feedback_landmarks,

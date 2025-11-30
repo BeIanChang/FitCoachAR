@@ -10,7 +10,11 @@ import json
 import os
 from typing import Dict, List
 
-from cerebras.cloud.sdk import Cerebras
+try:
+    # Optional: only needed if use_api=True
+    from cerebras.cloud.sdk import Cerebras
+except Exception:  # ImportError or any runtime issue
+    Cerebras = None  # type: ignore
 
 
 class LLMFeedbackGenerator:
@@ -74,10 +78,10 @@ class LLMFeedbackGenerator:
             use_api: If True, use actual LLM API (requires api_key)
             api_key: API key for LLM service (e.g., OpenAI)
         """
-        self.use_api = use_api
+        self.use_api = bool(use_api and Cerebras is not None)
         self.api_key = api_key or os.environ.get("CEREBRAS_API_KEY")
         self.client = None
-        if self.use_api:
+        if self.use_api and Cerebras is not None:
             if not self.api_key:
                 raise ValueError("Cerebras API key not found. Please provide it as an argument or set the CEREBRAS_API_KEY environment variable.")
             self.client = Cerebras(api_key=self.api_key)

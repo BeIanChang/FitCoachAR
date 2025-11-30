@@ -627,6 +627,25 @@ class MediaPipe3DBackend(PoseBackend):
                                 mp_pose.PoseLandmark.RIGHT_ANKLE.value,
                             ]
 
+        # Distance metrics based on 2D image landmarks for analysis.
+        ls = image_landmarks[mp_pose.PoseLandmark.LEFT_SHOULDER.value]
+        rs = image_landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value]
+        rh = image_landmarks[mp_pose.PoseLandmark.RIGHT_HIP.value]
+        rk = image_landmarks[mp_pose.PoseLandmark.RIGHT_KNEE.value]
+        ra = image_landmarks[mp_pose.PoseLandmark.RIGHT_ANKLE.value]
+        rw = image_landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value]
+
+        shl_dx = ls.x - rs.x
+        shl_dy = ls.y - rs.y
+        shl_dist = float((shl_dx ** 2 + shl_dy ** 2) ** 0.5)
+
+        rshl_rpalm_dist = float(rs.y - rw.y)
+        rshl_rhip_dist = float(rh.y - rs.y)
+        rpalm_rhip_dist = float(rw.y - rh.y)
+        rknee_rhip_dist = float(rk.y - rh.y)
+        rknee_rfeet_dist = float(ra.y - rk.y)
+        rhip_rfeet_dist = float(ra.y - rh.y)
+
         if self.calibration_session and self.calibration_session.get("exercise") == (
             self.selected_exercise or "bicep_curls"
         ):
@@ -680,6 +699,13 @@ class MediaPipe3DBackend(PoseBackend):
             "squat_counter": self.squat_counter,
             "left_knee_angle": left_knee_angle,
             "right_knee_angle": right_knee_angle,
+            "metric_shl_dist": shl_dist,
+            "metric_rshl_rpalm": rshl_rpalm_dist,
+            "metric_rshl_rhip": rshl_rhip_dist,
+            "metric_rpalm_rhip": rpalm_rhip_dist,
+            "metric_rknee_rhip": rknee_rhip_dist,
+            "metric_rknee_rfeet": rknee_rfeet_dist,
+            "metric_rhip_rfeet": rhip_rfeet_dist,
             "feedback": feedback,
             "llm_feedback": llm_message,
             "feedback_landmarks": feedback_landmarks,
