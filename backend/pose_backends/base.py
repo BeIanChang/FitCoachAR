@@ -34,3 +34,23 @@ class PoseBackend(ABC):
     def close(self) -> None:
         """Release resources."""
         return None
+
+
+class LM:
+    def __init__(self, d: Dict[str, Any]):
+        self.x = d["x"]
+        self.y = d["y"]
+        self.z = d.get("z", 0.0)
+        self.visibility = d.get("visibility", 0.0)
+
+
+class PoseEstimator(ABC):
+    @abstractmethod
+    def process_frame(self, frame_bgr: np.ndarray) -> Optional[Dict[str, Any]]:
+        """Process a decoded BGR frame and return landmarks."""
+    @abstractmethod
+    def process_video(self, video_path: str) -> Optional[List[Dict[str, Any]]]:
+        """Process a video file and return landmarks per frame."""
+    @abstractmethod
+    def landmark_dict(self) -> Dict[str, int]:
+        """Return a mapping from landmark name to index in the output array/order."""

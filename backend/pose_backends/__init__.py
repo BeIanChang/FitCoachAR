@@ -7,6 +7,8 @@ import logging
 from typing import Dict, Type
 
 from .base import PoseBackend
+from .mediapipe_estimator import MediaPipePoseEstimator
+from .pose_processor_2d import PoseProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,7 @@ def _register(module_name: str, class_name: str) -> None:
 
 
 _register("mediapipe2d", "MediaPipe2DPoseBackend")
+_register("pose_processor_2d", "PoseProcessor")
 _register("mediapipe3d", "MediaPipe3DBackend")
 _register("movenet3d", "MoveNet3DBackend")
 _register("mmpose_lifter", "MMPosePoseLifterBackend")
@@ -33,7 +36,6 @@ def get_available_backends():
     """Return the list of registered backend names."""
     return list(BACKEND_REGISTRY.keys())
 
-
 def build_pose_backend(name: str) -> PoseBackend:
     """Instantiate a pose backend by registry name."""
     backend_cls = BACKEND_REGISTRY.get(name)
@@ -42,4 +44,8 @@ def build_pose_backend(name: str) -> PoseBackend:
             f"Unknown pose backend '{name}'. "
             f"Available options: {', '.join(get_available_backends())}"
         )
-    return backend_cls()
+
+    if backend_cls is PoseProcessor:
+        return backend_cls(estimator=MediaPipePoseEstimator())
+    else:
+        return backend_cls()
