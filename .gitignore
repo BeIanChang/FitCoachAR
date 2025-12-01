@@ -2,3 +2,7 @@
 /dataset/
 .DS_Store
 backend/calibrations.json
+
+.env
+
+**/venv/

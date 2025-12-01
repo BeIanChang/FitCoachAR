@@ -3,6 +3,9 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import AROverlay from './AROverlay';
 import './App.css';
 
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+
 const EXERCISES = [
   {
     id: 'bicep_curls',
@@ -242,7 +245,7 @@ function App() {
       }
 
       setStatus('Connecting to server...');
-      const socket = new WebSocket('ws://localhost:8001/ws');
+      const socket = new WebSocket(`${WS_URL}/ws`);
       ws.current = socket;
 
       socket.onopen = () => {
@@ -725,7 +728,7 @@ function App() {
   const saveWorkoutData = async (sessionData) => {
     if (!sessionData.exercise) return;
     try {
-      await fetch('http://localhost:8001/save_workout', {
+      await fetch(`${BACKEND_URL}/save_workout`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(sessionData)
@@ -739,7 +742,7 @@ function App() {
     if (!sessionData.exercise) return;
     setIsLlmLoading(true);
     try {
-      const response = await fetch('http://localhost:8001/summary', {
+      const response = await fetch(`${BACKEND_URL}/summary`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(sessionData)
@@ -763,7 +766,7 @@ function App() {
     setIsLlmLoading(true);
 
     try {
-      const response = await fetch('http://localhost:8001/ask', {
+      const response = await fetch(`${BACKEND_URL}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_data: workoutSummaryRef.current, question })
