@@ -1,0 +1,17 @@
+{
+    "type": "question_answer",
+    "timestamp": "20251130_223802",
+    "input_to_llm": {
+        "session_data": {
+            "total_reps": 4,
+            "success_rate": 0.25,
+            "mistakes": {
+                "errors_detected": 3
+            },
+            "avg_tempo": 0.0,
+            "exercise": "bicep_curls"
+        },
+        "question": "can you tell me a summery of my statistics?"
+    },
+    "llm_response": "Based on your workout data, here's a summary of your statistics: \n\nYou completed 4 reps of bicep curls with a success rate of 25%, meaning 1 rep was done correctly and 3 reps contained errors. Your average tempo was 0.0, indicating you may need to work on your pace. \n\nWould you like some tips on how to improve your bicep curl form and increase your success rate?"
+}

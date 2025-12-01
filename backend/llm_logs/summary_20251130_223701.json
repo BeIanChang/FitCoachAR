@@ -1,0 +1,14 @@
+{
+    "type": "session_summary",
+    "timestamp": "20251130_223701",
+    "input_to_llm": {
+        "total_reps": 4,
+        "success_rate": 0.25,
+        "mistakes": {
+            "errors_detected": 3
+        },
+        "avg_tempo": 0.0,
+        "exercise": "bicep_curls"
+    },
+    "llm_response": "Great job pushing through your bicep curls session, you completed a total of 4 reps with a focus on building strength. Although your form accuracy was at 25%, which is an area to work on, it's a starting point to improve from. One key area to focus on for next time is reducing the 3 errors detected, which likely stemmed from rushing through the movement, so try to prioritize a slower and more controlled tempo to ensure proper form. Keep up the good work and don't get discouraged - with practice and dedication, you'll see improvement and be curling like a pro in no time!"
+}

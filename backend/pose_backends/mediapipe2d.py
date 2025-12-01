@@ -15,6 +15,7 @@ from filters import KalmanLandmarkSmoother
 from kinematics import AngularFeatureExtractor
 from llm_feedback import LLMFeedbackGenerator
 from calibration_store import store, new_record, CalibrationRecord
+from session import WorkoutSession
 from .base import PoseBackend
 
 
@@ -65,6 +66,9 @@ class MediaPipe2DPoseBackend(PoseBackend):
         self.reset_state(reset_calibration=True)
         self._apply_active_calibration("bicep_curls")
         self._apply_active_calibration("squats")
+        
+        # Session management
+        self.active_session: Optional[WorkoutSession] = None
 
     def _apply_active_calibration(self, exercise: str):
         record = store.get_active_record(exercise, self.current_mode)
@@ -514,6 +518,136 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 "record": record,
             }
 
+        # ==================== SESSION COMMANDS ====================
+        
+        if command == "start_session":
+            # Start a new workout session
+            # Payload: {"command": "start_session", "sets": [
+            #   {"exercise": "squats", "reps": 10},
+            #   {"exercise": "bicep_curls", "reps": 12}
+            # ], "name": "My Workout"}
+            sets_config = command_data.get("sets", [])
+            session_name = command_data.get("name", "Workout")
+            
+            if not sets_config:
+                return {
+                    "event": "session_error",
+                    "message": "No sets provided. Include 'sets' array with exercise and reps."
+                }
+            
+            # Validate exercises
+            valid_exercises = {"bicep_curls", "squats"}
+            for s in sets_config:
+                if s.get("exercise") not in valid_exercises:
+                    return {
+                        "event": "session_error",
+                        "message": f"Invalid exercise: {s.get('exercise')}. Valid: {valid_exercises}"
+                    }
+            
+            self.active_session = WorkoutSession.from_config(sets_config, name=session_name)
+            self.active_session.start()
+            
+            # Set the current exercise and reset counters
+            if self.active_session.current_exercise:
+                self.selected_exercise = self.active_session.current_exercise
+            self.reset_state(reset_calibration=False)
+            self._apply_active_calibration(self.selected_exercise)
+            
+            return {
+                "event": "session_started",
+                "session": self.active_session.to_dict(),
+                "progress": self.active_session.get_progress(),
+            }
+        
+        if command == "next_set":
+            # Advance to the next set in the session
+            if not self.active_session:
+                return {
+                    "event": "session_error",
+                    "message": "No active session. Start a session first."
+                }
+            
+            next_set = self.active_session.advance_to_next_set()
+            
+            if next_set:
+                # Switch to the new exercise
+                self.selected_exercise = next_set.exercise
+                self.reset_state(reset_calibration=False)
+                self._apply_active_calibration(self.selected_exercise)
+                
+                return {
+                    "event": "set_started",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+            else:
+                # Session complete
+                return {
+                    "event": "session_complete",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+        
+        if command == "skip_set":
+            # Skip current set and move to next
+            if not self.active_session:
+                return {
+                    "event": "session_error",
+                    "message": "No active session."
+                }
+            
+            next_set = self.active_session.skip_current_set()
+            
+            if next_set:
+                self.selected_exercise = next_set.exercise
+                self.reset_state(reset_calibration=False)
+                self._apply_active_calibration(self.selected_exercise)
+                
+                return {
+                    "event": "set_skipped",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+            else:
+                return {
+                    "event": "session_complete",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+        
+        if command == "get_session_progress":
+            # Get current session status
+            if not self.active_session:
+                return {
+                    "event": "session_progress",
+                    "active": False,
+                    "progress": None,
+                }
+            
+            return {
+                "event": "session_progress",
+                "active": True,
+                "progress": self.active_session.get_progress(),
+            }
+        
+        if command == "end_session":
+            # End the current session early
+            if not self.active_session:
+                return {
+                    "event": "session_error",
+                    "message": "No active session to end."
+                }
+            
+            self.active_session.finish()
+            summary = self.active_session.to_dict()
+            self.active_session = None
+            self.reset_state(reset_calibration=False)
+            
+            return {
+                "event": "session_ended",
+                "session": summary,
+            }
+
         return None
 
     def process_frame(self, frame_bgr: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -657,6 +791,10 @@ class MediaPipe2DPoseBackend(PoseBackend):
                         self.curl_counter += 1
                         print("rep counted")
                         self.total_reps += 1
+                        self.rep_timestamps.append(time.time())  # Record timestamp for tempo
+                        # Track rep in active session
+                        if self.active_session and self.active_session.current_set:
+                            self.active_session.record_rep()
                         feedback = ""
                     else:
                         stability_threshold = (
@@ -702,6 +840,10 @@ class MediaPipe2DPoseBackend(PoseBackend):
                         self.squat_state = "UP"
                         self.squat_counter += 1
                         self.total_reps += 1
+                        self.rep_timestamps.append(time.time())  # Record timestamp for tempo
+                        # Track rep in active session
+                        if self.active_session and self.active_session.current_set:
+                            self.active_session.record_rep()
                         feedback = ""
                     else:
                         if right_hip_y > right_knee_y:
@@ -768,6 +910,36 @@ class MediaPipe2DPoseBackend(PoseBackend):
             for lm in landmarks
         ]
 
+        # Build arrow feedback for visual coaching
+        arrow_feedback = []
+        if feedback and feedback not in ["", "Good rep!", "Great curl!", "Good depth!", "Adjust camera to show full body"]:
+            if self.selected_exercise == "bicep_curls":
+                if "elbow" in feedback.lower():
+                    # Elbow drifting - arrow pointing inward to body
+                    arrow_feedback.append({
+                        "joint_idx": 14,  # Right elbow
+                        "type": "elbow_stability",
+                        "direction": "left",  # Point toward body
+                        "color": "#facc15"  # Yellow
+                    })
+                elif "range" in feedback.lower() or "higher" in feedback.lower():
+                    # Need to curl higher - arrow pointing up
+                    arrow_feedback.append({
+                        "joint_idx": 16,  # Right wrist
+                        "type": "curl_higher",
+                        "direction": "up",
+                        "color": "#facc15"
+                    })
+            elif self.selected_exercise == "squats":
+                if "deeper" in feedback.lower():
+                    # Need to squat deeper - arrow pointing down on hip
+                    arrow_feedback.append({
+                        "joint_idx": 24,  # Right hip
+                        "type": "squat_deeper",
+                        "direction": "down",
+                        "color": "#facc15"
+                    })
+
         data_to_send = {
             "landmarks": landmarks_data,
             "left_elbow_angle": left_elbow_angle,
@@ -788,6 +960,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
             "feedback": feedback,
             "llm_feedback": llm_message,
             "feedback_landmarks": feedback_landmarks,
+            "arrow_feedback": arrow_feedback,  # New: structured arrow data
             "kinematic_features": angular_features,
             "backend": self.name,
         }
@@ -800,6 +973,10 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 "max_angle": self.calibration_session.get("max_angle"),
                 "frozen": self.calibration_session.get("frozen", False),
             }
+
+        # Include session progress if active
+        if self.active_session:
+            data_to_send["session_progress"] = self.active_session.get_progress()
 
         self.last_processed_data = data_to_send
         return data_to_send
