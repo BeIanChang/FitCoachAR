@@ -31,6 +31,10 @@ WORKOUTS_DIR = "workouts"
 if not os.path.exists(WORKOUTS_DIR):
     os.makedirs(WORKOUTS_DIR)
 
+LLM_LOGS_DIR = "llm_logs"
+if not os.path.exists(LLM_LOGS_DIR):
+    os.makedirs(LLM_LOGS_DIR)
+
 # --- LLM Integration ---
 CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "csk-pe9ve2dc58528hxp34jwd4v8jk426t4mk9223my3j3k6ej5c")
 llm_generator = LLMFeedbackGenerator(use_api=True, api_key=CEREBRAS_API_KEY)
@@ -67,13 +71,48 @@ def read_root():
 
 @app.post("/summary")
 async def get_summary(session_data: SessionData):
+    # Log the exact data sent to LLM
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_data = {
+        "type": "session_summary",
+        "timestamp": timestamp,
+        "input_to_llm": session_data.dict(),
+    }
+    
     summary = llm_generator.generate_session_summary(session_data.dict())
+    
+    # Save complete log with response
+    log_data["llm_response"] = summary
+    log_filepath = os.path.join(LLM_LOGS_DIR, f"summary_{timestamp}.json")
+    with open(log_filepath, "w") as f:
+        json.dump(log_data, f, indent=4)
+    logger.info(f"LLM summary log saved to {log_filepath}")
+    
     return {"summary": summary}
 
 
 @app.post("/ask")
 async def ask_question(request: AskRequest):
+    # Log the exact data sent to LLM
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_data = {
+        "type": "question_answer",
+        "timestamp": timestamp,
+        "input_to_llm": {
+            "session_data": request.session_data.dict(),
+            "question": request.question
+        },
+    }
+    
     answer = llm_generator.answer_question(request.session_data.dict(), request.question)
+    
+    # Save complete log with response
+    log_data["llm_response"] = answer
+    log_filepath = os.path.join(LLM_LOGS_DIR, f"qa_{timestamp}.json")
+    with open(log_filepath, "w") as f:
+        json.dump(log_data, f, indent=4)
+    logger.info(f"LLM Q&A log saved to {log_filepath}")
+    
     return {"answer": answer}
 
 
