@@ -84,6 +84,7 @@ function App() {
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [llmFeedback, setLlmFeedback] = useState('');
   const [feedbackLandmarks, setFeedbackLandmarks] = useState([]);
+  const [arrowFeedback, setArrowFeedback] = useState([]);  // New: structured arrow data
   const [poseLandmarks, setPoseLandmarks] = useState([]); // State to hold landmarks for the 3D avatar
   const [appState, setAppState] = useState('selection'); // 'selection', 'session_builder', 'calibration_countdown', 'calibrating_live', 'calibration_saving', 'workout', 'summary'
   
@@ -146,6 +147,7 @@ function App() {
     setFeedbackMessage('');
     setLlmFeedback('');
     setFeedbackLandmarks([]);
+    setArrowFeedback([]);
     setPoseLandmarks([]);
     setLeftElbowAngle(null);
     setRightElbowAngle(null);
@@ -502,10 +504,20 @@ function App() {
           }
           if (eventType === 'session_complete') {
             setSessionProgress(data.progress);
+            // Save full session data (includes all sets)
+            if (data.session) {
+              saveSessionData(data.session);
+              sendSessionToLLM(data.session);
+            }
             setStatus('Session complete! Great workout!');
             return;
           }
           if (eventType === 'session_ended') {
+            // Save full session data (includes all sets) before clearing
+            if (data.session) {
+              saveSessionData(data.session);
+              sendSessionToLLM(data.session);
+            }
             setSessionProgress(null);
             setStatus('Session ended.');
             return;
@@ -560,12 +572,25 @@ function App() {
           if (data.left_elbow_angle) setLeftElbowAngle(data.left_elbow_angle.toFixed(2));
           if (data.right_elbow_angle) setRightElbowAngle(data.right_elbow_angle.toFixed(2));
           if (data.feedback) {
-            setFeedbackMessage(data.feedback);
-            const isError = !['perfect', 'great', 'good', 'keep going'].some(positiveWord => data.feedback.toLowerCase().includes(positiveWord));
+            // Only show text for errors, not for positive feedback
+            const isPositive = ['good rep', 'great curl', 'good depth', 'perfect'].some(
+              phrase => data.feedback.toLowerCase().includes(phrase)
+            );
+            setFeedbackMessage(isPositive ? '' : data.feedback);  // Hide positive text
+            
+            const isError = !isPositive && data.feedback.trim() !== '';
             if (isError && repCounterRef.current > 0 && lastErrorRep.current !== repCounterRef.current) {
               setErrorReps(prev => prev + 1);
               lastErrorRep.current = repCounterRef.current;
             }
+          } else {
+            setFeedbackMessage('');
+          }
+          // Arrow feedback from backend (visual coaching)
+          if (data.arrow_feedback) {
+            setArrowFeedback(data.arrow_feedback);
+          } else {
+            setArrowFeedback([]);
           }
           if (data.llm_feedback) setLlmFeedback(data.llm_feedback);
           if (data.feedback_landmarks) setFeedbackLandmarks(data.feedback_landmarks);
@@ -764,10 +789,58 @@ function App() {
     sendCommand({ command: 'skip_set' });
   };
 
-  // End session early
+  // End session early - the backend will send session_ended event with full data
   const endSession = () => {
     sendCommand({ command: 'end_session' });
-    endWorkout();
+    // The WebSocket handler for 'session_ended' will save data and send to LLM
+  };
+
+  // Save complete session data to backend
+  const saveSessionData = async (sessionData) => {
+    try {
+      await fetch(`${BACKEND_URL}/save_session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(sessionData)
+      });
+    } catch (error) {
+      console.error('Failed to save session data:', error);
+    }
+  };
+
+  // Send full session data to LLM for summary
+  const sendSessionToLLM = (sessionData) => {
+    // Calculate success rate (capped at 1.0 = 100%)
+    const rawSuccessRate = sessionData.total_reps_target > 0 
+      ? sessionData.total_reps_completed / sessionData.total_reps_target 
+      : 0;
+    const successRate = Math.min(1.0, rawSuccessRate);
+    
+    // Calculate tempo (seconds per rep)
+    const avgTempo = sessionData.duration_seconds > 0 && sessionData.total_reps_completed > 0
+      ? sessionData.duration_seconds / sessionData.total_reps_completed
+      : 0;
+    
+    // Count total mistakes
+    const mistakesObj = sessionData.all_mistakes || {};
+    const totalErrors = Object.values(mistakesObj).reduce((sum, count) => sum + count, 0);
+    
+    // Build summary matching backend SessionData model
+    const sessionSummary = {
+      total_reps: sessionData.total_reps_completed,
+      success_rate: successRate,
+      mistakes: { errors_detected: totalErrors, ...mistakesObj },
+      avg_tempo: avgTempo,
+      exercise: `session: ${sessionData.name}`,
+      // Extra fields for context (backend will ignore but useful for display)
+      session_details: sessionData
+    };
+    
+    setWorkoutSummary(sessionSummary);
+    workoutSummaryRef.current = sessionSummary;
+    setAppState('summary');
+    
+    fetchLlmSummary(sessionSummary);
   };
 
   const beginCalibration = () => {
@@ -1232,6 +1305,7 @@ function App() {
               <AROverlay 
                 landmarks={poseLandmarks}
                 feedbackLandmarks={feedbackLandmarks}
+                arrowFeedback={arrowFeedback}
                 selectedExercise={selectedExercise}
                 backend={backendName}
                 currentAngles={{
@@ -1292,6 +1366,7 @@ function App() {
             <AROverlay 
               landmarks={poseLandmarks}
               feedbackLandmarks={feedbackLandmarks}
+              arrowFeedback={arrowFeedback}
               selectedExercise={selectedExercise}
               backend={backendName}
               currentAngles={{
@@ -1300,16 +1375,16 @@ function App() {
               }}
               targetAngles={{
                 rightElbow: 45,
-              rightKnee: 90
-            }}
-          />
-        </div>
-        <div className="calibration-actions">
-          <button
-            type="button"
-            onClick={finishCalibration}
-            disabled={
-              !calibrationProgress ||
+                rightKnee: 90
+              }}
+            />
+          </div>
+          <div className="calibration-actions">
+            <button
+              type="button"
+              onClick={finishCalibration}
+              disabled={
+                !calibrationProgress ||
               calibrationProgress.min_angle === null ||
               calibrationProgress.max_angle === null
             }
@@ -1393,7 +1468,6 @@ function App() {
             
             <h2>REPS: {sessionProgress?.current_set?.completed_reps ?? repCounter}</h2>
             <h2 className="feedback">{feedbackMessage}</h2>
-            {llmFeedback && <p className="llm-feedback">💬 {llmFeedback}</p>}
           </div>
           <div className="angle-display">
             {selectedExercise === 'bicep_curls' && (
@@ -1423,6 +1497,7 @@ function App() {
             <AROverlay 
               landmarks={poseLandmarks}
               feedbackLandmarks={feedbackLandmarks}
+              arrowFeedback={arrowFeedback}
               selectedExercise={selectedExercise}
               backend={backendName}
               currentAngles={{

@@ -11,7 +11,7 @@ import uvloop
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 from llm_feedback import LLMFeedbackGenerator
@@ -42,9 +42,13 @@ llm_generator = LLMFeedbackGenerator(use_api=True, api_key=CEREBRAS_API_KEY)
 class SessionData(BaseModel):
     total_reps: int
     success_rate: float
-    mistakes: Dict[str, int]
+    mistakes: Dict[str, Any]
     avg_tempo: float
     exercise: str
+    session_details: Optional[Dict[str, Any]] = None  # Full session data for context
+    
+    class Config:
+        extra = "ignore"  # Ignore extra fields
 
 class AskRequest(BaseModel):
     session_data: SessionData
@@ -128,6 +132,30 @@ async def save_workout(session_data: SessionData):
 
         return {"status": "success", "message": f"Workout saved to {filepath}"}
     except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/save_session")
+async def save_session(session_data: Dict[str, Any]):
+    """Save complete session data (multi-set workout) to a JSON file."""
+    try:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_name = session_data.get("name", "session").replace(" ", "_")
+        filename = f"session_{session_name}_{timestamp}.json"
+        filepath = os.path.join(WORKOUTS_DIR, filename)
+
+        with open(filepath, "w") as f:
+            json.dump(session_data, f, indent=4)
+
+        # Also save to LLM logs for analysis
+        log_filepath = os.path.join(LLM_LOGS_DIR, f"session_{timestamp}.json")
+        with open(log_filepath, "w") as f:
+            json.dump(session_data, f, indent=4)
+
+        logger.info(f"Session saved to {filepath}")
+        return {"status": "success", "message": f"Session saved to {filepath}"}
+    except Exception as e:
+        logger.error(f"Failed to save session: {e}")
         return {"status": "error", "message": str(e)}
 
 

@@ -910,6 +910,36 @@ class MediaPipe2DPoseBackend(PoseBackend):
             for lm in landmarks
         ]
 
+        # Build arrow feedback for visual coaching
+        arrow_feedback = []
+        if feedback and feedback not in ["", "Good rep!", "Great curl!", "Good depth!", "Adjust camera to show full body"]:
+            if self.selected_exercise == "bicep_curls":
+                if "elbow" in feedback.lower():
+                    # Elbow drifting - arrow pointing inward to body
+                    arrow_feedback.append({
+                        "joint_idx": 14,  # Right elbow
+                        "type": "elbow_stability",
+                        "direction": "left",  # Point toward body
+                        "color": "#facc15"  # Yellow
+                    })
+                elif "range" in feedback.lower() or "higher" in feedback.lower():
+                    # Need to curl higher - arrow pointing up
+                    arrow_feedback.append({
+                        "joint_idx": 16,  # Right wrist
+                        "type": "curl_higher",
+                        "direction": "up",
+                        "color": "#facc15"
+                    })
+            elif self.selected_exercise == "squats":
+                if "deeper" in feedback.lower():
+                    # Need to squat deeper - arrow pointing down on hip
+                    arrow_feedback.append({
+                        "joint_idx": 24,  # Right hip
+                        "type": "squat_deeper",
+                        "direction": "down",
+                        "color": "#facc15"
+                    })
+
         data_to_send = {
             "landmarks": landmarks_data,
             "left_elbow_angle": left_elbow_angle,
@@ -930,6 +960,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
             "feedback": feedback,
             "llm_feedback": llm_message,
             "feedback_landmarks": feedback_landmarks,
+            "arrow_feedback": arrow_feedback,  # New: structured arrow data
             "kinematic_features": angular_features,
             "backend": self.name,
         }
