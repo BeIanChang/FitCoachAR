@@ -205,7 +205,6 @@ class CalibrationStore:
         data: Dict[str, Dict] = {"exercises": {}}
         for name, entry in self.exercises.items():
             records_serialized = [rec.to_dict() for rec in entry.records]
-            print(records_serialized)
             data["exercises"][name] = {
                 "records": records_serialized,
                 "active": entry.active,
@@ -220,8 +219,6 @@ class CalibrationStore:
         entry = self.exercises.setdefault(exercise, ExerciseEntry())
         rec_id = uuid.uuid4().hex
         a = CalibrationRecord(id=rec_id, params=params, timestamp=_timestamp())
-        print(a)
-        print(a.to_dict())
         entry.records.append(a)
         if make_active:
             entry.active = [rec_id]

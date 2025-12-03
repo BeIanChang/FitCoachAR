@@ -53,6 +53,7 @@ class PoseProcessor(PoseBackend):
 
     def handle_command(self, command_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         command = command_data.get("command")
+        print(command)
         exercise = command_data.get("exercise") or self.selected_exercise or "bicep_curls"
         self.selected_exercise = exercise
 
@@ -104,9 +105,17 @@ class PoseProcessor(PoseBackend):
                 "active": {"common": rec_id}
             }
 
-        if command == "use_calibrations":
+        if command == "use_workout":
+            print(command_data)
             record_id = command_data.get("record_id")
-            if not record_id: return {"event": "error", "message": "ID required"}
+            if not record_id:
+                return {"event": "error", "message": "ID required"}
+
+            # If frontend used `use_workout`, treat as applying for the 'common' (workout) slot
+            if command == "use_workout":
+                mode = "common"
+            else:
+                mode = command_data.get("mode", "calibration")
 
             self.param_store.set_active_record(exercise, record_id)
             params = self.param_store.get_active_params(exercise)
@@ -115,7 +124,7 @@ class PoseProcessor(PoseBackend):
                 self.counters[exercise] = NormalizedRepCounter(params)
                 self.checkers[exercise] = FormChecker(params)
 
-            return {"event": "calibration_applied", "activeCalibration": {"id": record_id}}
+            return {"event": "calibration_applied", "mode": mode, "activeCalibration": {"id": record_id}}
 
         if command == "set_critic":
             self.critic_value = float(command_data.get("value", 0.5))
@@ -135,7 +144,6 @@ class PoseProcessor(PoseBackend):
             return {"event": "calibration_started", "exercise": exercise}
 
         if command == "finalize_auto_calibration":
-            print("finalize_auto_calibration")
             if not self.calibration_session:
                 return {"event": "error", "message": "No session"}
 
@@ -198,6 +206,7 @@ class PoseProcessor(PoseBackend):
             "exercise": self.selected_exercise,
             "feedback": "",
             "rep_count": 0,
+            # Include exercise-specific counters expected by the frontend
             "rep_phase": "BOTTOM"
         }
 
@@ -241,7 +250,8 @@ class PoseProcessor(PoseBackend):
                 "seconds_remaining": max(0.0, end_time - now) if end_time else 0,
                 "frozen": frozen,
             }
-
+            payload["calibration_progress"] = self.calibration_progress
+        print(payload['rep_count'], payload['rep_phase'])
         return payload
 
     def close(self) -> None:
