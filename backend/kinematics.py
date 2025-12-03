@@ -13,6 +13,23 @@ import mediapipe as mp
 
 mp_pose = mp.solutions.pose
 
+# Default landmark dictionary using MediaPipe pose landmarks
+DEFAULT_LANDMARK_DICT = {
+    "LEFT_SHOULDER": mp_pose.PoseLandmark.LEFT_SHOULDER.value,
+    "RIGHT_SHOULDER": mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
+    "LEFT_ELBOW": mp_pose.PoseLandmark.LEFT_ELBOW.value,
+    "RIGHT_ELBOW": mp_pose.PoseLandmark.RIGHT_ELBOW.value,
+    "LEFT_WRIST": mp_pose.PoseLandmark.LEFT_WRIST.value,
+    "RIGHT_WRIST": mp_pose.PoseLandmark.RIGHT_WRIST.value,
+    "LEFT_HIP": mp_pose.PoseLandmark.LEFT_HIP.value,
+    "RIGHT_HIP": mp_pose.PoseLandmark.RIGHT_HIP.value,
+    "LEFT_KNEE": mp_pose.PoseLandmark.LEFT_KNEE.value,
+    "RIGHT_KNEE": mp_pose.PoseLandmark.RIGHT_KNEE.value,
+    "LEFT_ANKLE": mp_pose.PoseLandmark.LEFT_ANKLE.value,
+    "RIGHT_ANKLE": mp_pose.PoseLandmark.RIGHT_ANKLE.value,
+    "NOSE": mp_pose.PoseLandmark.NOSE.value,
+}
+
 
 class BodyRelativeFrame:
     """
@@ -253,7 +270,7 @@ class AngularFeatureExtractor:
         return np.degrees(angle)
 
     @staticmethod
-    def extract_all_features(landmarks, landmark_dict):
+    def extract_all_features(landmarks, landmark_dict=None):
         """
         Extract comprehensive set of angular features.
 
@@ -261,6 +278,8 @@ class AngularFeatureExtractor:
         - Active features: elbow, knee, shoulder angles
         - Passive features: spine angle, hip stability
         """
+        if landmark_dict is None:
+            landmark_dict = DEFAULT_LANDMARK_DICT
         features = {}
 
         # Helper to get 3D point

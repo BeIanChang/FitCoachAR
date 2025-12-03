@@ -2,3 +2,12 @@
 /dataset/
 .DS_Store
 backend/calibrations.json
+
+.env
+
+**/venv/
+backend/workouts/
+backend/llm_logs/
+
+
+__pycache__
