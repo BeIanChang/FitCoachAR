@@ -97,6 +97,9 @@ function App() {
   const [llmSummary, setLlmSummary] = useState('');
   const [chatHistory, setChatHistory] = useState([]);
   const [isLlmLoading, setIsLlmLoading] = useState(false);
+  const [formAnalysis, setFormAnalysis] = useState(null);  // Form analysis results
+  const [formSnapshots, setFormSnapshots] = useState([]);  // Collected form snapshots
+  const [postRepCommand, setPostRepCommand] = useState(null);  // Realtime coaching command after rep
   const [selectedExercise, setSelectedExercise] = useState(null);
   const [countdown, setCountdown] = useState(null);
   const [latencyMs, setLatencyMs] = useState(null);
@@ -160,6 +163,9 @@ function App() {
     awaitingResponseRef.current = false;
     setBackendName(null);
     setSessionProgress(null);
+    setFormAnalysis(null);
+    setFormSnapshots([]);
+    setPostRepCommand(null);
   }, []);
 
   const handleCriticChange = useCallback((mode, value) => {
@@ -592,11 +598,21 @@ function App() {
           } else {
             setArrowFeedback([]);
           }
-          if (data.llm_feedback) setLlmFeedback(data.llm_feedback);
+          if (data.coach_tip) setLlmFeedback(data.coach_tip);  // Realtime coach tip
+          // Post-rep coaching command (aligned with form states)
+          if (data.post_rep_command !== undefined) {
+            setPostRepCommand(data.post_rep_command);
+          }
           if (data.feedback_landmarks) setFeedbackLandmarks(data.feedback_landmarks);
           if (data.calibration_progress) setCalibrationProgress(data.calibration_progress);
           if (data.rep_timestamps) setRepTimestamps(data.rep_timestamps);
           if (data.session_progress) setSessionProgress(data.session_progress);
+          // Collect form snapshots (from WebSocket directly or from session progress)
+          if (data.form_snapshots && data.form_snapshots.length > 0) {
+            setFormSnapshots(data.form_snapshots);
+          } else if (data.session_progress?.current_set?.form_snapshots) {
+            setFormSnapshots(data.session_progress.current_set.form_snapshots);
+          }
 
           // Update the pose landmarks for the 3D avatar
           setPoseLandmarks(data.landmarks);
@@ -929,9 +945,56 @@ function App() {
     workoutSummaryRef.current = finalSummary;
     setAppState('summary');
 
-    // Call backend services with the final summary data
-    fetchLlmSummary(finalSummary);
+    // Save workout data
     saveWorkoutData(finalSummary);
+    
+    // Fetch form analysis first, then pass to LLM for aligned summary
+    if (formSnapshots.length > 0) {
+      fetchFormAnalysisAndSummary(selectedExerciseRef.current, formSnapshots, repCounter, finalSummary);
+    } else {
+      // No form snapshots, just fetch LLM summary with basic data
+      fetchLlmSummary(finalSummary);
+    }
+  };
+
+  const fetchFormAnalysisAndSummary = async (exercise, snapshots, totalReps, sessionData) => {
+    if (!exercise || snapshots.length === 0) return;
+    try {
+      // First, get the form analysis
+      const analysisResponse = await fetch(`${BACKEND_URL}/analyze_form`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          exercise,
+          form_snapshots: snapshots,
+          total_reps: totalReps
+        })
+      });
+      const analysisData = await analysisResponse.json();
+      
+      if (analysisData.status === 'success') {
+        setFormAnalysis(analysisData.analysis);
+        
+        // Now fetch LLM summary with the form analysis included
+        const enrichedSessionData = {
+          ...sessionData,
+          form_analysis: {
+            score: analysisData.analysis.score,
+            good_reps: analysisData.analysis.good_reps,
+            total_reps: analysisData.analysis.total_reps,
+            top_issues: analysisData.analysis.top_issues,
+            form_states_count: analysisData.analysis.form_states_count
+          }
+        };
+        fetchLlmSummary(enrichedSessionData);
+      } else {
+        // Fallback to basic summary
+        fetchLlmSummary(sessionData);
+      }
+    } catch (error) {
+      console.error('Failed to fetch form analysis:', error);
+      fetchLlmSummary(sessionData);
+    }
   };
 
   const saveWorkoutData = async (sessionData) => {
@@ -1404,6 +1467,7 @@ function App() {
           isLoading={isLlmLoading}
           onAskQuestion={handleAskQuestion}
           onReset={resetApp}
+          formAnalysis={formAnalysis}
         />
       )}
 
@@ -1467,6 +1531,12 @@ function App() {
             )}
             
             <h2>REPS: {sessionProgress?.current_set?.completed_reps ?? repCounter}</h2>
+            {/* Post-rep coaching command (aligned with form states) */}
+            {postRepCommand && (
+              <div className="post-rep-command">
+                {postRepCommand}
+              </div>
+            )}
             <h2 className="feedback">{feedbackMessage}</h2>
           </div>
           <div className="angle-display">
@@ -1516,7 +1586,7 @@ function App() {
   );
 }
 
-function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset }) {
+function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset, formAnalysis }) {
   const [question, setQuestion] = useState('');
   const chatContainerRef = useRef(null);
 
@@ -1535,6 +1605,85 @@ function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset }
 
   return (
     <div className="llm-feedback-container">
+      {/* Form Analysis Section */}
+      {formAnalysis && (
+        <div className="form-analysis-section">
+          <h2>Form Analysis</h2>
+          <div className="form-score-card">
+            <div className="score-circle" style={{
+              background: `conic-gradient(${formAnalysis.score >= 70 ? '#22c55e' : formAnalysis.score >= 40 ? '#eab308' : '#ef4444'} ${formAnalysis.score * 3.6}deg, #333 0deg)`
+            }}>
+              <span className="score-value">{formAnalysis.score}%</span>
+            </div>
+            <div className="score-details">
+              <p><strong>Good Reps:</strong> {formAnalysis.good_reps} / {formAnalysis.total_reps}</p>
+            </div>
+          </div>
+          
+          {formAnalysis.top_issues && formAnalysis.top_issues.length > 0 && (
+            <div className="form-issues">
+              <h3>Areas to Improve</h3>
+              {formAnalysis.top_issues.map((issue, idx) => (
+                <div key={idx} className="issue-card">
+                  <div className="issue-header">
+                    <span className="issue-name">{issue.state.replace(/_/g, ' ')}</span>
+                    <span className="issue-count">{issue.count} reps ({issue.percentage}%)</span>
+                  </div>
+                  <p className="issue-description">{issue.description}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Per-Rep Breakdown */}
+          {formAnalysis.snapshots && formAnalysis.snapshots.length > 0 && (
+            <div className="rep-breakdown">
+              <h3>Rep-by-Rep Breakdown</h3>
+              <div className="rep-list">
+                {formAnalysis.snapshots.map((snapshot, idx) => {
+                  const feedback = snapshot.feedback || {};
+                  const isGood = feedback.is_good;
+                  return (
+                    <div key={idx} className={`rep-item ${isGood ? 'good' : 'needs-work'}`}>
+                      <div className="rep-header">
+                        <span className="rep-number">Rep {idx + 1}</span>
+                        <span className={`rep-status ${isGood ? 'good' : 'bad'}`}>
+                          {isGood ? '✓ Good Form' : '⚠ Needs Work'}
+                        </span>
+                      </div>
+                      
+                      {/* Summary */}
+                      <p className={`rep-summary ${isGood ? 'good' : 'bad'}`}>
+                        {feedback.summary}
+                      </p>
+                      
+                      {/* Detailed feedback from primitives */}
+                      {feedback.details && feedback.details.length > 0 && (
+                        <div className="rep-details">
+                          {feedback.details.map((detail, i) => (
+                            <p key={i} className="rep-detail">• {detail}</p>
+                          ))}
+                        </div>
+                      )}
+                      
+                      {/* Key highlights/focus areas */}
+                      {feedback.highlights && feedback.highlights.length > 0 && (
+                        <div className="rep-highlights">
+                          <span className="highlight-label">Focus on:</span>
+                          {feedback.highlights.map((highlight, i) => (
+                            <span key={i} className="highlight-tag">{highlight}</span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       <h2>AI Coach Summary</h2>
       <div className="summary-card">
         {isLoading && !summary ? <p>Generating your summary...</p> : <p>{summary}</p>}
