@@ -65,7 +65,7 @@ const CANONICAL_BASELINES = {
 const createDefaultSummary = () => ({
   records: [],
   active: { common: null, calibration: null },
-  critics: { common: 0.2, calibration: 0.2 }
+  critics: { common: 0.2 }
 });
 
 function App() {
@@ -108,7 +108,7 @@ function App() {
   const [appMode, setAppMode] = useState('common');
   const [calibrationSummary, setCalibrationSummary] = useState({});
   const [selectedRecordId, setSelectedRecordId] = useState(null);
-  const [criticInputs, setCriticInputs] = useState({ common: '0.200', calibration: '0.200' });
+  const [criticInputs, setCriticInputs] = useState({ common: '0.200' });
   const [latestCalibration, setLatestCalibration] = useState(null);
   const [calibrationProgress, setCalibrationProgress] = useState(null);
   const [showCalibrationManager, setShowCalibrationManager] = useState(false);
@@ -187,22 +187,11 @@ function App() {
     });
   }, [sendCommand]);
 
-  const handleUseDefault = useCallback((mode) => {
-    if (!selectedExerciseRef.current) return;
-    sendCommand({
-      command: 'use_calibration',
-      exercise: selectedExerciseRef.current,
-      record_id: null,
-      mode,
-    });
-  }, [sendCommand]);
-
   useEffect(() => {
     const summary = selectedExercise ? (calibrationSummary[selectedExercise] || createDefaultSummary()) : createDefaultSummary();
-    const critics = summary.critics || { common: 0.2, calibration: 0.2 };
+    const critics = summary.critics || { common: 0.2 };
     setCriticInputs({
       common: Number(critics.common ?? 0.2).toFixed(3),
-      calibration: Number(critics.calibration ?? 0.2).toFixed(3),
     });
   }, [selectedExercise, calibrationSummary]);
 
@@ -264,6 +253,7 @@ function App() {
 
   useEffect(() => {
     repCounterRef.current = repCounter;
+    console.log('repCounter state ->', repCounter);
   }, [repCounter]);
 
   // Effect to check for MediaPipe libraries
@@ -557,17 +547,11 @@ function App() {
         if (data.backend) setBackendName(data.backend);
 
         if (data.landmarks) {
-          const currentExercise = selectedExerciseRef.current;
-          if (currentExercise === 'squats') {
-            if (data.hasOwnProperty('squat_counter')) setRepCounter(data.squat_counter);
-          } else {
-            if (data.hasOwnProperty('curl_counter')) {
-              setRepCounter(data.curl_counter);
-            } else if (data.hasOwnProperty('squat_counter')) {
-              // Fallback in case backend only sends squat counter
-              setRepCounter(data.squat_counter);
-            }
+          if (data.hasOwnProperty('rep_count')) {
+            console.log('rep_count ->', data.rep_count);
+            setRepCounter(data.rep_count);
           }
+            
           if (data.hasOwnProperty('latency_ms')) setLatencyMs(data.latency_ms);
           if (data.hasOwnProperty('client_ts')) {
             const rtt = performance.now() - data.client_ts;
@@ -604,7 +588,9 @@ function App() {
             setPostRepCommand(data.post_rep_command);
           }
           if (data.feedback_landmarks) setFeedbackLandmarks(data.feedback_landmarks);
-          if (data.calibration_progress) setCalibrationProgress(data.calibration_progress);
+          if (data.calibration_progress){
+            setCalibrationProgress(data.calibration_progress);
+          } 
           if (data.rep_timestamps) setRepTimestamps(data.rep_timestamps);
           if (data.session_progress) setSessionProgress(data.session_progress);
           // Collect form snapshots (from WebSocket directly or from session progress)
@@ -1210,37 +1196,8 @@ function App() {
               />
               <button onClick={() => handleCriticSubmit('common')}>Apply</button>
             </div>
-            <div>
-              <label>Critic (calibration): </label>
-              <input
-                type="number"
-                step="0.01"
-                value={criticInputs.calibration}
-                onChange={(e) => handleCriticChange('calibration', e.target.value)}
-              />
-              <button onClick={() => handleCriticSubmit('calibration')}>Apply</button>
-            </div>
           </div>
-          <div className="calibration-defaults">
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => handleUseDefault('common')}
-            >
-              Use Default Workout Baseline
-            </button>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={() => handleUseDefault('calibration')}
-            >
-              Use Default Calibration Baseline
-            </button>
-          </div>
-          <div className="baseline-status">
-            <span><strong>Workout baseline:</strong> {workoutBaselineLabel}</span>
-            <span><strong>Calibration baseline:</strong> {calibrationBaselineLabel}</span>
-          </div>
+          
           {currentRecords.length === 0 && <p>No calibrations saved yet. Record a new one to personalize thresholds.</p>}
           {currentRecords.length > 0 && (
             <div className="calibration-records-list">
@@ -1277,19 +1234,11 @@ function App() {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          sendCommand({ command: 'use_calibration', record_id: record.id, mode: 'common' });
+                          // New command: use_workout
+                          sendCommand({ command: 'use_workout', record_id: record.id, mode: 'common' });
                         }}
                       >
                         Use for Workout
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          sendCommand({ command: 'use_calibration', record_id: record.id, mode: 'calibration' });
-                        }}
-                      >
-                        Use for Calibration
                       </button>
                       <button
                         type="button"
@@ -1450,7 +1399,7 @@ function App() {
             ></video>
             <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
             {/* 3D Avatar disabled - avatar.glb missing */}
-            <AROverlay 
+            <AROverlay
               landmarks={poseLandmarks}
               feedbackLandmarks={feedbackLandmarks}
               arrowFeedback={arrowFeedback}
@@ -1458,7 +1407,7 @@ function App() {
               backend={backendName}
               currentAngles={{
                 rightElbow: rightElbowAngle ? parseFloat(rightElbowAngle) : 0,
-                rightKnee: rightKneeAngle ? parseFloat(rightKneeAngle) : 0
+                rightKnee: rightKneeAngle ? parseFloat(rightKneeAngle) : 0,
               }}
               targetAngles={{
                 rightElbow: 45,

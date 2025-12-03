@@ -10,6 +10,7 @@ from calibration_v2 import CalibrationParams
 
 class FormChecker:
     def __init__(self, params: CalibrationParams):
+        print(params)
         self.params = params
 
     def check(self, current_metrics: Dict[str, float], rep_progress: float, critic: float = 0.5) -> List[str]:
