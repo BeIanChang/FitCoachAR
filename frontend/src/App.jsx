@@ -824,7 +824,7 @@ function App() {
     }
   };
 
-  // Send full session data to LLM for summary
+  // Send full session data to LLM for summary (with form analysis)
   const sendSessionToLLM = (sessionData) => {
     // Calculate success rate (capped at 1.0 = 100%)
     const rawSuccessRate = sessionData.total_reps_target > 0 
@@ -856,7 +856,31 @@ function App() {
     workoutSummaryRef.current = sessionSummary;
     setAppState('summary');
     
-    fetchLlmSummary(sessionSummary);
+    // Collect all form snapshots from all sets in the session
+    const allFormSnapshots = [];
+    if (sessionData.sets) {
+      sessionData.sets.forEach(set => {
+        if (set.form_snapshots && set.form_snapshots.length > 0) {
+          allFormSnapshots.push(...set.form_snapshots);
+        }
+      });
+    }
+    
+    // If we have form snapshots, fetch form analysis first
+    // Use the exercise from the first set, or fallback to a generic name
+    const primaryExercise = sessionData.sets?.[0]?.exercise || 'workout';
+    
+    if (allFormSnapshots.length > 0) {
+      fetchFormAnalysisAndSummary(
+        primaryExercise, 
+        allFormSnapshots, 
+        sessionData.total_reps_completed, 
+        sessionSummary
+      );
+    } else {
+      // No form snapshots, just fetch LLM summary with basic data
+      fetchLlmSummary(sessionSummary);
+    }
   };
 
   const beginCalibration = () => {
