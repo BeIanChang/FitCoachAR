@@ -8,7 +8,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import cv2
-import mediapipe as mp
+import mediapipe as mpgit
 import numpy as np
 
 from filters import KalmanLandmarkSmoother
