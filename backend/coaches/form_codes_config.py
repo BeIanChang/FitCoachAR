@@ -1,4 +1,11 @@
-PRIMITIVES_CONFIG = {
+"""
+Form Codes Configuration
+
+Form Codes are the low-level pose metrics extracted from each repetition.
+They are categorized into ranges (e.g., "deep", "shallow") based on thresholds.
+"""
+
+FORM_CODES_CONFIG = {
     "squats": {
         "static": {
             "squat_depth": {

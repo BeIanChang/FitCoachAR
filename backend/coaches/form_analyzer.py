@@ -1,66 +1,69 @@
 """
-Form Analyzer - Analyzes workout form using primitives and states.
+Form Analyzer - Analyzes workout form using Form Codes and Super Form Codes.
 
 This module takes the raw form data collected during a workout and:
-1. Categorizes each primitive value using the thresholds in form_primitives_config.py
-2. Determines which FormStates apply to each rep using form_states_config.py
+1. Categorizes each Form Code value using the thresholds in form_codes_config.py
+2. Determines which Super Form Codes apply to each rep using super_form_codes_config.py
 3. Aggregates the results into a comprehensive workout summary.
 """
 
 from typing import Dict, Any, List, Optional
-from .form_primitives_config import PRIMITIVES_CONFIG
-from .form_states_config import FORM_STATES_CONFIG
+from .form_codes_config import FORM_CODES_CONFIG
+from .super_form_codes_config import SUPER_FORM_CODES_CONFIG
 
 
 class FormAnalyzer:
     """
-    Analyzes workout form based on collected primitive data.
+    Analyzes workout form based on collected Form Code data.
     
     Usage:
         analyzer = FormAnalyzer()
         
-        # Categorize a raw value
-        category = analyzer.categorize_primitive("squats", "squat_depth", 85)
+        # Categorize a raw Form Code value
+        category = analyzer.categorize_form_code("squats", "squat_depth", 85)
         # Returns: "deep"
+        
+        # Determine Super Form Codes from categorized Form Codes
+        super_codes = analyzer.determine_super_form_codes("squats", form_codes_dict)
         
         # Analyze a full session
         summary = analyzer.analyze_session(workout_session)
     """
     
     def __init__(self):
-        self.primitives_config = PRIMITIVES_CONFIG
-        self.states_config = FORM_STATES_CONFIG
+        self.form_codes_config = FORM_CODES_CONFIG
+        self.super_form_codes_config = SUPER_FORM_CODES_CONFIG
     
-    def categorize_primitive(
+    def categorize_form_code(
         self, 
         exercise: str, 
-        primitive_name: str, 
+        form_code_name: str, 
         value: float
     ) -> Optional[str]:
         """
-        Categorize a raw primitive value into its category name.
+        Categorize a raw Form Code value into its category name.
         
         Args:
             exercise: "squats" or "bicep_curls"
-            primitive_name: e.g., "squat_depth", "descent_speed"
+            form_code_name: e.g., "squat_depth", "descent_speed"
             value: The raw measured value
             
         Returns:
             Category name (e.g., "deep", "controlled") or None if not found
         """
-        exercise_config = self.primitives_config.get(exercise, {})
+        exercise_config = self.form_codes_config.get(exercise, {})
         
-        # Check both static and dynamic primitives
-        primitive_config = None
+        # Check both static and dynamic form codes
+        form_code_config = None
         for ptype in ["static", "dynamic"]:
-            if primitive_name in exercise_config.get(ptype, {}):
-                primitive_config = exercise_config[ptype][primitive_name]
+            if form_code_name in exercise_config.get(ptype, {}):
+                form_code_config = exercise_config[ptype][form_code_name]
                 break
         
-        if not primitive_config:
+        if not form_code_config:
             return None
         
-        categories = primitive_config.get("categories", [])
+        categories = form_code_config.get("categories", [])
         
         for cat in categories:
             v_min = cat.get("v_min")
@@ -75,50 +78,50 @@ class FormAnalyzer:
         
         return None
     
-    def determine_form_states(
+    def determine_super_form_codes(
         self, 
         exercise: str, 
-        primitives: Dict[str, str]
+        form_codes: Dict[str, str]
     ) -> List[str]:
         """
-        Determine which FormStates apply given a set of categorized primitives.
+        Determine which Super Form Codes apply given a set of categorized Form Codes.
         
         Args:
             exercise: "squats" or "bicep_curls"
-            primitives: Dict mapping primitive names to their categories
+            form_codes: Dict mapping Form Code names to their categories
                         e.g., {"squat_depth": "deep", "knee_stability": "stable"}
         
         Returns:
-            List of FormState names that apply, e.g., ["GOOD_REP"] or ["SHALLOW_DEPTH", "KNEE_COLLAPSE"]
+            List of Super Form Code names that apply, e.g., ["GOOD_REP"] or ["SHALLOW_DEPTH", "KNEE_COLLAPSE"]
         """
-        states_config = self.states_config.get(exercise, {})
-        active_states = []
+        super_codes_config = self.super_form_codes_config.get(exercise, {})
+        active_super_codes = []
         
-        for state_name, state_def in states_config.items():
-            rules = state_def.get("rules", [])
-            state_applies = True
+        for super_code_name, super_code_def in super_codes_config.items():
+            rules = super_code_def.get("rules", [])
+            code_applies = True
             
             for rule in rules:
-                primitive_name = rule.get("primitive")
+                form_code_name = rule.get("form_code")
                 must_be = rule.get("must_be", [])
                 must_not_be = rule.get("must_not_be", [])
                 
-                actual_category = primitives.get(primitive_name)
+                actual_category = form_codes.get(form_code_name)
                 
                 # Check must_be condition
                 if must_be and actual_category not in must_be:
-                    state_applies = False
+                    code_applies = False
                     break
                 
                 # Check must_not_be condition
                 if must_not_be and actual_category in must_not_be:
-                    state_applies = False
+                    code_applies = False
                     break
             
-            if state_applies:
-                active_states.append(state_name)
+            if code_applies:
+                active_super_codes.append(super_code_name)
         
-        return active_states
+        return active_super_codes
     
     def analyze_session(self, session) -> Dict[str, Any]:
         """
@@ -139,7 +142,7 @@ class FormAnalyzer:
             "overall_score": 0.0,
         }
         
-        all_states_count = {}
+        all_super_codes_count = {}
         
         for exercise_set in session.sets:
             exercise = exercise_set.exercise
@@ -148,8 +151,8 @@ class FormAnalyzer:
                 analysis["exercises"][exercise] = {
                     "total_reps": 0,
                     "good_reps": 0,
-                    "form_states_count": {},
-                    "primitive_averages": {},
+                    "super_form_codes_count": {},
+                    "form_code_averages": {},
                 }
             
             ex_analysis = analysis["exercises"][exercise]
@@ -158,44 +161,44 @@ class FormAnalyzer:
                 analysis["total_reps"] += 1
                 ex_analysis["total_reps"] += 1
                 
-                # Count form states
-                for state in snapshot.form_states:
-                    ex_analysis["form_states_count"][state] = \
-                        ex_analysis["form_states_count"].get(state, 0) + 1
-                    all_states_count[state] = all_states_count.get(state, 0) + 1
+                # Count super form codes
+                for super_code in snapshot.form_states:
+                    ex_analysis["super_form_codes_count"][super_code] = \
+                        ex_analysis["super_form_codes_count"].get(super_code, 0) + 1
+                    all_super_codes_count[super_code] = all_super_codes_count.get(super_code, 0) + 1
                 
                 # Track if this was a good rep
                 if "GOOD_REP" in snapshot.form_states:
                     analysis["total_good_reps"] += 1
                     ex_analysis["good_reps"] += 1
                 
-                # Accumulate primitive values for averaging
-                all_primitives = {
+                # Accumulate form code values for averaging
+                all_form_codes = {
                     **snapshot.static_primitives,
                     **snapshot.dynamic_primitives
                 }
-                for prim_name, prim_data in all_primitives.items():
-                    if prim_name not in ex_analysis["primitive_averages"]:
-                        ex_analysis["primitive_averages"][prim_name] = {
+                for code_name, code_data in all_form_codes.items():
+                    if code_name not in ex_analysis["form_code_averages"]:
+                        ex_analysis["form_code_averages"][code_name] = {
                             "sum": 0,
                             "count": 0,
                             "categories": {}
                         }
                     
-                    prim_avg = ex_analysis["primitive_averages"][prim_name]
-                    prim_avg["sum"] += prim_data.get("value", 0)
-                    prim_avg["count"] += 1
+                    code_avg = ex_analysis["form_code_averages"][code_name]
+                    code_avg["sum"] += code_data.get("value", 0)
+                    code_avg["count"] += 1
                     
-                    cat = prim_data.get("category", "unknown")
-                    prim_avg["categories"][cat] = prim_avg["categories"].get(cat, 0) + 1
+                    cat = code_data.get("category", "unknown")
+                    code_avg["categories"][cat] = code_avg["categories"].get(cat, 0) + 1
         
         # Calculate averages and finalize
         for exercise, ex_data in analysis["exercises"].items():
-            for prim_name, prim_data in ex_data["primitive_averages"].items():
-                if prim_data["count"] > 0:
-                    prim_data["average"] = prim_data["sum"] / prim_data["count"]
-                del prim_data["sum"]
-                del prim_data["count"]
+            for code_name, code_data in ex_data["form_code_averages"].items():
+                if code_data["count"] > 0:
+                    code_data["average"] = code_data["sum"] / code_data["count"]
+                del code_data["sum"]
+                del code_data["count"]
             
             # Calculate exercise score
             if ex_data["total_reps"] > 0:
@@ -212,37 +215,46 @@ class FormAnalyzer:
             )
         
         # Add top issues
-        analysis["top_issues"] = self._get_top_issues(all_states_count)
+        analysis["top_issues"] = self._get_top_issues(all_super_codes_count)
         
         return analysis
     
     def _get_top_issues(
         self, 
-        states_count: Dict[str, int], 
+        super_codes_count: Dict[str, int], 
         top_n: int = 3
     ) -> List[Dict[str, Any]]:
         """
-        Get the top N most frequent form issues.
+        Get the top N most frequent form issues (Super Form Codes).
         """
         # Filter out GOOD_REP as it's not an issue
-        issues = {k: v for k, v in states_count.items() if k != "GOOD_REP"}
+        issues = {k: v for k, v in super_codes_count.items() if k != "GOOD_REP"}
         
         # Sort by count descending
         sorted_issues = sorted(issues.items(), key=lambda x: x[1], reverse=True)
         
         top_issues = []
-        for state_name, count in sorted_issues[:top_n]:
+        for super_code_name, count in sorted_issues[:top_n]:
             # Find description from config
             description = ""
-            for exercise_states in self.states_config.values():
-                if state_name in exercise_states:
-                    description = exercise_states[state_name].get("description", "")
+            for exercise_codes in self.super_form_codes_config.values():
+                if super_code_name in exercise_codes:
+                    description = exercise_codes[super_code_name].get("description", "")
                     break
             
             top_issues.append({
-                "state": state_name,
+                "super_form_code": super_code_name,
                 "count": count,
                 "description": description
             })
         
         return top_issues
+
+    # Backward compatibility aliases
+    def categorize_primitive(self, exercise: str, primitive_name: str, value: float) -> Optional[str]:
+        """Alias for categorize_form_code (backward compatibility)."""
+        return self.categorize_form_code(exercise, primitive_name, value)
+    
+    def determine_form_states(self, exercise: str, primitives: Dict[str, str]) -> List[str]:
+        """Alias for determine_super_form_codes (backward compatibility)."""
+        return self.determine_super_form_codes(exercise, primitives)

@@ -1,15 +1,15 @@
 """
-Feedback Generator - Creates detailed, human-readable sentences from primitives and states.
+Feedback Generator - Creates detailed, human-readable sentences from Form Codes and Super Form Codes.
 
-This module takes the raw primitive categories and form states and generates
+This module takes the Form Code categories and Super Form Codes and generates
 rich, descriptive feedback for each repetition.
 """
 
 from typing import Dict, List, Any, Optional
 
 
-# Primitive category descriptions - maps each category to a human-readable description
-PRIMITIVE_DESCRIPTIONS = {
+# Form Code category descriptions - maps each category to a human-readable description
+FORM_CODE_DESCRIPTIONS = {
     "bicep_curls": {
         "static": {
             "peak_flexion": {
@@ -98,8 +98,8 @@ PRIMITIVE_DESCRIPTIONS = {
     }
 }
 
-# State summary sentences - used when a specific form state is detected
-STATE_SUMMARIES = {
+# Super Form Code summary sentences - used when a specific Super Form Code is detected
+SUPER_FORM_CODE_SUMMARIES = {
     "bicep_curls": {
         "GOOD_REP": "This was a well-executed rep with proper form!",
         "INCOMPLETE_RANGE": "Focus on completing the full range of motion.",
@@ -121,61 +121,61 @@ STATE_SUMMARIES = {
 
 def generate_rep_feedback(
     exercise: str,
-    static_primitives: Dict[str, Any],
-    dynamic_primitives: Dict[str, Any],
-    form_states: List[str]
+    static_form_codes: Dict[str, Any],
+    dynamic_form_codes: Dict[str, Any],
+    super_form_codes: List[str]
 ) -> Dict[str, Any]:
     """
     Generate detailed feedback for a single repetition.
     
     Args:
         exercise: The exercise type (e.g., "bicep_curls", "squats")
-        static_primitives: Dict mapping primitive names to {"value": x, "category": "name"}
-        dynamic_primitives: Dict mapping primitive names to {"value": x, "category": "name"}
-        form_states: List of detected form states for this rep
+        static_form_codes: Dict mapping Form Code names to {"value": x, "category": "name"}
+        dynamic_form_codes: Dict mapping Form Code names to {"value": x, "category": "name"}
+        super_form_codes: List of detected Super Form Codes for this rep
     
     Returns:
         Dict containing:
             - is_good: bool indicating if this was a good rep
             - summary: A brief summary sentence
             - details: List of detailed feedback sentences
-            - highlights: Key points to focus on (from states)
+            - highlights: Key points to focus on (from Super Form Codes)
     """
-    exercise_descriptions = PRIMITIVE_DESCRIPTIONS.get(exercise, {})
-    exercise_summaries = STATE_SUMMARIES.get(exercise, {})
+    exercise_descriptions = FORM_CODE_DESCRIPTIONS.get(exercise, {})
+    exercise_summaries = SUPER_FORM_CODE_SUMMARIES.get(exercise, {})
     
-    is_good = "GOOD_REP" in form_states
+    is_good = "GOOD_REP" in super_form_codes
     details = []
     highlights = []
     
-    # Generate details from static primitives
+    # Generate details from static form codes
     static_desc = exercise_descriptions.get("static", {})
-    for primitive_name, primitive_data in static_primitives.items():
+    for code_name, code_data in static_form_codes.items():
         # Handle both formats: {"value": x, "category": "name"} or just "category_name"
-        if isinstance(primitive_data, dict):
-            category = primitive_data.get("category", "")
+        if isinstance(code_data, dict):
+            category = code_data.get("category", "")
         else:
-            category = primitive_data
+            category = code_data
         
-        if primitive_name in static_desc and category in static_desc[primitive_name]:
-            details.append(static_desc[primitive_name][category])
+        if code_name in static_desc and category in static_desc[code_name]:
+            details.append(static_desc[code_name][category])
     
-    # Generate details from dynamic primitives
+    # Generate details from dynamic form codes
     dynamic_desc = exercise_descriptions.get("dynamic", {})
-    for primitive_name, primitive_data in dynamic_primitives.items():
+    for code_name, code_data in dynamic_form_codes.items():
         # Handle both formats: {"value": x, "category": "name"} or just "category_name"
-        if isinstance(primitive_data, dict):
-            category = primitive_data.get("category", "")
+        if isinstance(code_data, dict):
+            category = code_data.get("category", "")
         else:
-            category = primitive_data
+            category = code_data
         
-        if primitive_name in dynamic_desc and category in dynamic_desc[primitive_name]:
-            details.append(dynamic_desc[primitive_name][category])
+        if code_name in dynamic_desc and category in dynamic_desc[code_name]:
+            details.append(dynamic_desc[code_name][category])
     
-    # Generate highlights from form states (excluding GOOD_REP)
-    for state in form_states:
-        if state != "GOOD_REP" and state in exercise_summaries:
-            highlights.append(exercise_summaries[state])
+    # Generate highlights from super form codes (excluding GOOD_REP)
+    for super_code in super_form_codes:
+        if super_code != "GOOD_REP" and super_code in exercise_summaries:
+            highlights.append(exercise_summaries[super_code])
     
     # Create summary
     if is_good:
@@ -210,15 +210,15 @@ def generate_workout_feedback(
     feedback_list = []
     
     for snapshot in snapshots:
-        static_prims = snapshot.get("static_primitives", {})
-        dynamic_prims = snapshot.get("dynamic_primitives", {})
-        form_states = snapshot.get("form_states", [])
+        static_codes = snapshot.get("static_primitives", {})
+        dynamic_codes = snapshot.get("dynamic_primitives", {})
+        super_codes = snapshot.get("form_states", [])
         
         feedback = generate_rep_feedback(
             exercise=exercise,
-            static_primitives=static_prims,
-            dynamic_primitives=dynamic_prims,
-            form_states=form_states
+            static_form_codes=static_codes,
+            dynamic_form_codes=dynamic_codes,
+            super_form_codes=super_codes
         )
         feedback_list.append(feedback)
     

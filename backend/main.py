@@ -177,32 +177,32 @@ async def analyze_form(request: FormAnalysisRequest):
     Works for both quick workouts and session-based workouts.
     """
     try:
-        from coaches.form_states_config import FORM_STATES_CONFIG
+        from coaches.super_form_codes_config import SUPER_FORM_CODES_CONFIG
         from coaches.feedback_generator import generate_rep_feedback
         
-        exercise_states = FORM_STATES_CONFIG.get(request.exercise, {})
+        exercise_super_codes = SUPER_FORM_CODES_CONFIG.get(request.exercise, {})
 
-        form_states_count = {}
+        super_form_codes_count = {}
         good_reps = 0
         processed_snapshots = []
 
         for snapshot in request.form_snapshots:
-            states = snapshot.get("form_states", [])
-            static_prims = snapshot.get("static_primitives", {})
-            dynamic_prims = snapshot.get("dynamic_primitives", {})
+            super_codes = snapshot.get("form_states", [])
+            static_codes = snapshot.get("static_primitives", {})
+            dynamic_codes = snapshot.get("dynamic_primitives", {})
             
             # Aggregate counting
-            for state in states:
-                form_states_count[state] = form_states_count.get(state, 0) + 1
-            if "GOOD_REP" in states:
+            for super_code in super_codes:
+                super_form_codes_count[super_code] = super_form_codes_count.get(super_code, 0) + 1
+            if "GOOD_REP" in super_codes:
                 good_reps += 1
 
             # Generate detailed feedback using the feedback generator
             feedback = generate_rep_feedback(
                 exercise=request.exercise,
-                static_primitives=static_prims,
-                dynamic_primitives=dynamic_prims,
-                form_states=states
+                static_form_codes=static_codes,
+                dynamic_form_codes=dynamic_codes,
+                super_form_codes=super_codes
             )
             
             new_snapshot = snapshot.copy()
@@ -212,14 +212,14 @@ async def analyze_form(request: FormAnalysisRequest):
         total_reps = request.total_reps or len(request.form_snapshots)
         
         # Get top issues for the summary view
-        issues = {k: v for k, v in form_states_count.items() if k != "GOOD_REP"}
+        issues = {k: v for k, v in super_form_codes_count.items() if k != "GOOD_REP"}
         sorted_issues = sorted(issues.items(), key=lambda x: x[1], reverse=True)
         
         top_issues = []
-        for state_name, count in sorted_issues[:3]:
-            description = exercise_states.get(state_name, {}).get("description", "")
+        for super_code_name, count in sorted_issues[:3]:
+            description = exercise_super_codes.get(super_code_name, {}).get("description", "")
             top_issues.append({
-                "state": state_name,
+                "super_form_code": super_code_name,
                 "count": count,
                 "percentage": round((count / total_reps) * 100, 1) if total_reps > 0 else 0,
                 "description": description
@@ -232,7 +232,7 @@ async def analyze_form(request: FormAnalysisRequest):
             "total_reps": total_reps,
             "good_reps": good_reps,
             "score": score,
-            "form_states_count": form_states_count,
+            "super_form_codes_count": super_form_codes_count,
             "top_issues": top_issues,
             "snapshots": processed_snapshots
         }

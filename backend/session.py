@@ -15,16 +15,16 @@ import uuid
 @dataclass
 class FormSnapshot:
     """
-    A snapshot of form primitives captured for a single repetition.
+    A snapshot of Form Codes captured for a single repetition.
     Contains both the raw metric values and their categorized names.
     """
     rep_number: int
     timestamp: float
-    # Static primitives: {"squat_depth": {"value": 85, "category": "deep"}, ...}
+    # Static Form Codes: {"squat_depth": {"value": 85, "category": "deep"}, ...}
     static_primitives: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Dynamic primitives: {"descent_speed": {"value": 0.4, "category": "controlled"}, ...}
+    # Dynamic Form Codes: {"descent_speed": {"value": 0.4, "category": "controlled"}, ...}
     dynamic_primitives: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    # Form states detected for this rep: ["GOOD_REP"] or ["SHALLOW_DEPTH", "KNEE_COLLAPSE"]
+    # Super Form Codes detected for this rep: ["GOOD_REP"] or ["SHALLOW_DEPTH", "KNEE_COLLAPSE"]
     form_states: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:

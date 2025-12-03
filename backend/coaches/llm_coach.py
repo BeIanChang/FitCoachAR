@@ -92,7 +92,7 @@ Keep the tone supportive and actionable. Format as a single paragraph."""
             # Build a cleaner data summary for the LLM
             top_issues_text = ""
             if form_analysis.get('top_issues'):
-                issues = [f"{issue['state'].replace('_', ' ')}: {issue['description']}" 
+                issues = [f"{issue.get('super_form_code', issue.get('state', 'unknown')).replace('_', ' ')}: {issue.get('description', '')}" 
                          for issue in form_analysis['top_issues'][:2]]
                 top_issues_text = "\n".join(issues)
             

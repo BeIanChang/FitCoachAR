@@ -8,3 +8,6 @@ backend/calibrations.json
 **/venv/
 backend/workouts/
 backend/llm_logs/
+
+
+__pycache__
