@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from typing import Dict, Any, Optional
 from datetime import datetime
 
-from llm_feedback import LLMFeedbackGenerator
+from coaches import LLMCoach, FormAnalyzer
 from pose_backends import build_pose_backend, get_available_backends
 
 # Install and use uvloop as the default event loop
@@ -35,9 +35,12 @@ LLM_LOGS_DIR = "llm_logs"
 if not os.path.exists(LLM_LOGS_DIR):
     os.makedirs(LLM_LOGS_DIR)
 
-# --- LLM Integration ---
+# --- LLM Coach Integration ---
 CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "csk-pe9ve2dc58528hxp34jwd4v8jk426t4mk9223my3j3k6ej5c")
-llm_generator = LLMFeedbackGenerator(use_api=True, api_key=CEREBRAS_API_KEY)
+llm_coach = LLMCoach(api_key=CEREBRAS_API_KEY)
+
+# --- Form Analyzer ---
+form_analyzer = FormAnalyzer()
 
 class SessionData(BaseModel):
     total_reps: int
@@ -46,6 +49,7 @@ class SessionData(BaseModel):
     avg_tempo: float
     exercise: str
     session_details: Optional[Dict[str, Any]] = None  # Full session data for context
+    form_analysis: Optional[Dict[str, Any]] = None  # Detailed form analysis from primitives/states
     
     class Config:
         extra = "ignore"  # Ignore extra fields
@@ -83,7 +87,7 @@ async def get_summary(session_data: SessionData):
         "input_to_llm": session_data.dict(),
     }
     
-    summary = llm_generator.generate_session_summary(session_data.dict())
+    summary = llm_coach.generate_session_summary(session_data.dict())
     
     # Save complete log with response
     log_data["llm_response"] = summary
@@ -108,7 +112,7 @@ async def ask_question(request: AskRequest):
         },
     }
     
-    answer = llm_generator.answer_question(request.session_data.dict(), request.question)
+    answer = llm_coach.answer_question(request.session_data.dict(), request.question)
     
     # Save complete log with response
     log_data["llm_response"] = answer
@@ -156,6 +160,86 @@ async def save_session(session_data: Dict[str, Any]):
         return {"status": "success", "message": f"Session saved to {filepath}"}
     except Exception as e:
         logger.error(f"Failed to save session: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+class FormAnalysisRequest(BaseModel):
+    """Request model for form analysis with snapshots data."""
+    exercise: str
+    form_snapshots: list  # List of FormSnapshot dicts
+    total_reps: int = 0
+
+
+@app.post("/analyze_form")
+async def analyze_form(request: FormAnalysisRequest):
+    """
+    Analyze form snapshots and return detailed form analysis.
+    Works for both quick workouts and session-based workouts.
+    """
+    try:
+        from coaches.super_form_codes_config import SUPER_FORM_CODES_CONFIG
+        from coaches.feedback_generator import generate_rep_feedback
+        
+        exercise_super_codes = SUPER_FORM_CODES_CONFIG.get(request.exercise, {})
+
+        super_form_codes_count = {}
+        good_reps = 0
+        processed_snapshots = []
+
+        for snapshot in request.form_snapshots:
+            super_codes = snapshot.get("form_states", [])
+            static_codes = snapshot.get("static_primitives", {})
+            dynamic_codes = snapshot.get("dynamic_primitives", {})
+            
+            # Aggregate counting
+            for super_code in super_codes:
+                super_form_codes_count[super_code] = super_form_codes_count.get(super_code, 0) + 1
+            if "GOOD_REP" in super_codes:
+                good_reps += 1
+
+            # Generate detailed feedback using the feedback generator
+            feedback = generate_rep_feedback(
+                exercise=request.exercise,
+                static_form_codes=static_codes,
+                dynamic_form_codes=dynamic_codes,
+                super_form_codes=super_codes
+            )
+            
+            new_snapshot = snapshot.copy()
+            new_snapshot["feedback"] = feedback
+            processed_snapshots.append(new_snapshot)
+
+        total_reps = request.total_reps or len(request.form_snapshots)
+        
+        # Get top issues for the summary view
+        issues = {k: v for k, v in super_form_codes_count.items() if k != "GOOD_REP"}
+        sorted_issues = sorted(issues.items(), key=lambda x: x[1], reverse=True)
+        
+        top_issues = []
+        for super_code_name, count in sorted_issues[:3]:
+            description = exercise_super_codes.get(super_code_name, {}).get("description", "")
+            top_issues.append({
+                "super_form_code": super_code_name,
+                "count": count,
+                "percentage": round((count / total_reps) * 100, 1) if total_reps > 0 else 0,
+                "description": description
+            })
+        
+        score = round((good_reps / total_reps) * 100, 1) if total_reps > 0 else 0
+        
+        analysis = {
+            "exercise": request.exercise,
+            "total_reps": total_reps,
+            "good_reps": good_reps,
+            "score": score,
+            "super_form_codes_count": super_form_codes_count,
+            "top_issues": top_issues,
+            "snapshots": processed_snapshots
+        }
+        
+        return {"status": "success", "analysis": analysis}
+    except Exception as e:
+        logger.error(f"Form analysis failed: {e}")
         return {"status": "error", "message": str(e)}
 
 

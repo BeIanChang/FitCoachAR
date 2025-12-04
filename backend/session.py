@@ -13,6 +13,31 @@ import uuid
 
 
 @dataclass
+class FormSnapshot:
+    """
+    A snapshot of Form Codes captured for a single repetition.
+    Contains both the raw metric values and their categorized names.
+    """
+    rep_number: int
+    timestamp: float
+    # Static Form Codes: {"squat_depth": {"value": 85, "category": "deep"}, ...}
+    static_primitives: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Dynamic Form Codes: {"descent_speed": {"value": 0.4, "category": "controlled"}, ...}
+    dynamic_primitives: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    # Super Form Codes detected for this rep: ["GOOD_REP"] or ["SHALLOW_DEPTH", "KNEE_COLLAPSE"]
+    form_states: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "rep_number": self.rep_number,
+            "timestamp": self.timestamp,
+            "static_primitives": self.static_primitives,
+            "dynamic_primitives": self.dynamic_primitives,
+            "form_states": self.form_states,
+        }
+
+
+@dataclass
 class ExerciseSet:
     """A single set of an exercise within a workout session."""
     
@@ -20,6 +45,7 @@ class ExerciseSet:
     target_reps: int        # Goal reps for this set
     completed_reps: int = 0
     mistakes: Dict[str, int] = field(default_factory=dict)
+    form_snapshots: List[FormSnapshot] = field(default_factory=list)
     start_time: Optional[float] = None
     end_time: Optional[float] = None
     
@@ -53,6 +79,10 @@ class ExerciseSet:
     def add_mistake(self, mistake_type: str):
         """Record a form mistake."""
         self.mistakes[mistake_type] = self.mistakes.get(mistake_type, 0) + 1
+
+    def add_form_snapshot(self, snapshot: FormSnapshot):
+        """Record a form snapshot for a completed rep."""
+        self.form_snapshots.append(snapshot)
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -62,6 +92,7 @@ class ExerciseSet:
             "remaining_reps": self.remaining_reps,
             "is_complete": self.is_complete,
             "mistakes": self.mistakes,
+            "form_snapshots": [s.to_dict() for s in self.form_snapshots],
             "duration_seconds": self.duration_seconds,
         }
 

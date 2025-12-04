@@ -13,9 +13,10 @@ import numpy as np
 
 from filters import KalmanLandmarkSmoother
 from kinematics import AngularFeatureExtractor
-from llm_feedback import LLMFeedbackGenerator
+from coaches import RealtimeCoach, FormAnalyzer
+from coaches.realtime_form_coach import get_realtime_form_coach
 from calibration_store import store, new_record, CalibrationRecord
-from session import WorkoutSession
+from session import WorkoutSession, FormSnapshot
 from .base import PoseBackend
 
 
@@ -54,7 +55,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
             model_complexity=1, min_detection_confidence=0.7, min_tracking_confidence=0.7
         )
         self.landmark_smoother = KalmanLandmarkSmoother()
-        self.llm_feedback = LLMFeedbackGenerator(use_api=False)
+        self.realtime_coach = RealtimeCoach()
         self.user_profile = {
             "upper_arm_length": None,
             "thigh_length": None,
@@ -69,6 +70,10 @@ class MediaPipe2DPoseBackend(PoseBackend):
         
         # Session management
         self.active_session: Optional[WorkoutSession] = None
+        
+        # Form analysis
+        self.form_analyzer = FormAnalyzer()
+        self._init_rep_buffer()
 
     def _apply_active_calibration(self, exercise: str):
         record = store.get_active_record(exercise, self.current_mode)
@@ -208,7 +213,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
         self.squat_counter = 0
         self.squat_state = "UP"
         self.feedback = ""
-        self.llm_feedback_message = ""
+        self.coach_tip = ""
         self.feedback_landmarks: List[int] = []
         self.last_processed_data: Optional[Dict[str, Any]] = None
         self.selected_exercise: Optional[str] = None
@@ -225,6 +230,16 @@ class MediaPipe2DPoseBackend(PoseBackend):
         self.total_reps = 0
         self.rep_timestamps: List[float] = []
         self.mistake_counter: Dict[str, int] = {}
+        self.last_form_snapshot: Optional[FormSnapshot] = None  # For quick workouts
+        self.all_form_snapshots: List[Dict] = []  # Accumulated snapshots for quick workouts
+        self.post_rep_command: Optional[str] = None  # Coaching command after rep
+        self.post_rep_command_frames: int = 0  # How long to show the command
+        
+        # Realtime form coach (aligned with form states)
+        self.realtime_form_coach = get_realtime_form_coach()
+        
+        # Rep buffer for form analysis
+        self._init_rep_buffer()
 
         if reset_calibration:
             self.arm_extended_angle = 160
@@ -239,6 +254,168 @@ class MediaPipe2DPoseBackend(PoseBackend):
             self.squat_down_angle = getattr(self, "squat_down_angle", 50)
         # Cancel any in-flight auto calibration when state resets.
         self.calibration_session = None
+    
+    def _init_rep_buffer(self):
+        """Initialize or clear the buffer for collecting rep data."""
+        self.rep_buffer = {
+            "frames": [],           # List of frame data dicts
+            "start_time": None,
+            "in_rep": False,
+            "min_angle": 180,       # Track minimum angle (for critical frame)
+            "max_angle": 0,         # Track maximum angle
+            "critical_frame": None, # Frame at the critical point of the rep
+        }
+    
+    def _buffer_frame(self, frame_data: Dict[str, Any]):
+        """Add a frame's data to the rep buffer."""
+        self.rep_buffer["frames"].append(frame_data)
+        
+        # Track critical frame (min angle for curls/squats = bottom of movement)
+        angle = frame_data.get("primary_angle", 180)
+        if angle < self.rep_buffer["min_angle"]:
+            self.rep_buffer["min_angle"] = angle
+            self.rep_buffer["critical_frame"] = frame_data
+    
+    def _analyze_rep_buffer(self, exercise: str) -> Optional[FormSnapshot]:
+        """
+        Analyze the buffered rep data and create a FormSnapshot.
+        Returns None if insufficient data.
+        """
+        frames = self.rep_buffer["frames"]
+        if len(frames) < 3:
+            return None
+        
+        critical = self.rep_buffer["critical_frame"] or frames[len(frames) // 2]
+        start_time = self.rep_buffer["start_time"] or time.time()
+        
+        # Calculate static primitives from critical frame
+        static_primitives = {}
+        
+        if exercise == "squats":
+            # Squat depth
+            depth_angle = critical.get("knee_angle", 90)
+            depth_cat = self.form_analyzer.categorize_primitive("squats", "squat_depth", depth_angle)
+            static_primitives["squat_depth"] = {"value": round(depth_angle, 1), "category": depth_cat}
+            
+            # Torso angle
+            torso_angle = critical.get("torso_angle", 0)
+            torso_cat = self.form_analyzer.categorize_primitive("squats", "torso_angle", torso_angle)
+            static_primitives["torso_angle"] = {"value": round(torso_angle, 1), "category": torso_cat}
+            
+        elif exercise == "bicep_curls":
+            # Peak flexion
+            flexion_angle = critical.get("elbow_angle", 90)
+            flexion_cat = self.form_analyzer.categorize_primitive("bicep_curls", "peak_flexion", flexion_angle)
+            static_primitives["peak_flexion"] = {"value": round(flexion_angle, 1), "category": flexion_cat}
+            
+            # Elbow position (drift from baseline)
+            elbow_drift = critical.get("elbow_drift", 0)
+            drift_cat = self.form_analyzer.categorize_primitive("bicep_curls", "elbow_position", abs(elbow_drift))
+            static_primitives["elbow_position"] = {"value": round(abs(elbow_drift), 3), "category": drift_cat}
+        
+        # Calculate dynamic primitives from frame sequence
+        dynamic_primitives = {}
+        
+        if len(frames) >= 2:
+            # Calculate rep duration
+            rep_duration = frames[-1].get("timestamp", 0) - frames[0].get("timestamp", 0)
+            
+            # Find descent and ascent phases
+            min_idx = 0
+            for i, f in enumerate(frames):
+                if f.get("primary_angle", 180) == self.rep_buffer["min_angle"]:
+                    min_idx = i
+                    break
+            
+            descent_frames = frames[:min_idx + 1] if min_idx > 0 else frames[:1]
+            ascent_frames = frames[min_idx:] if min_idx < len(frames) - 1 else frames[-1:]
+            
+            if exercise == "squats":
+                # Descent speed (change in hip Y position over time)
+                if len(descent_frames) >= 2:
+                    descent_time = descent_frames[-1].get("timestamp", 0) - descent_frames[0].get("timestamp", 0)
+                    if descent_time > 0:
+                        descent_speed = abs(descent_frames[-1].get("hip_y", 0) - descent_frames[0].get("hip_y", 0)) / descent_time
+                        descent_cat = self.form_analyzer.categorize_primitive("squats", "descent_speed", descent_speed)
+                        dynamic_primitives["descent_speed"] = {"value": round(descent_speed, 3), "category": descent_cat}
+                
+                # Ascent speed
+                if len(ascent_frames) >= 2:
+                    ascent_time = ascent_frames[-1].get("timestamp", 0) - ascent_frames[0].get("timestamp", 0)
+                    if ascent_time > 0:
+                        ascent_speed = abs(ascent_frames[-1].get("hip_y", 0) - ascent_frames[0].get("hip_y", 0)) / ascent_time
+                        ascent_cat = self.form_analyzer.categorize_primitive("squats", "ascent_speed", ascent_speed)
+                        dynamic_primitives["ascent_speed"] = {"value": round(ascent_speed, 3), "category": ascent_cat}
+                
+                # Knee stability (max deviation from start position)
+                knee_positions = [f.get("knee_x", 0) for f in frames]
+                if knee_positions:
+                    knee_deviation = max(knee_positions) - min(knee_positions)
+                    stability_cat = self.form_analyzer.categorize_primitive("squats", "knee_stability", knee_deviation)
+                    dynamic_primitives["knee_stability"] = {"value": round(knee_deviation, 3), "category": stability_cat}
+            
+            elif exercise == "bicep_curls":
+                # Lift speed (angular velocity)
+                if len(descent_frames) >= 2:
+                    lift_time = descent_frames[-1].get("timestamp", 0) - descent_frames[0].get("timestamp", 0)
+                    if lift_time > 0:
+                        angle_change = abs(descent_frames[-1].get("elbow_angle", 0) - descent_frames[0].get("elbow_angle", 0))
+                        lift_speed = angle_change / lift_time
+                        lift_cat = self.form_analyzer.categorize_primitive("bicep_curls", "lift_speed", lift_speed)
+                        dynamic_primitives["lift_speed"] = {"value": round(lift_speed, 1), "category": lift_cat}
+                
+                # Swing momentum (shoulder movement)
+                shoulder_positions = [f.get("shoulder_z", 0) for f in frames]
+                if shoulder_positions:
+                    swing = max(shoulder_positions) - min(shoulder_positions)
+                    swing_cat = self.form_analyzer.categorize_primitive("bicep_curls", "swing_momentum", swing)
+                    dynamic_primitives["swing_momentum"] = {"value": round(swing, 3), "category": swing_cat}
+        
+        # Determine form states
+        all_primitives = {}
+        for name, data in static_primitives.items():
+            all_primitives[name] = data.get("category", "unknown")
+        for name, data in dynamic_primitives.items():
+            all_primitives[name] = data.get("category", "unknown")
+        
+        form_states = self.form_analyzer.determine_form_states(exercise, all_primitives)
+        
+        # Create the snapshot
+        rep_number = self.curl_counter if exercise == "bicep_curls" else self.squat_counter
+        snapshot = FormSnapshot(
+            rep_number=rep_number,
+            timestamp=start_time,
+            static_primitives=static_primitives,
+            dynamic_primitives=dynamic_primitives,
+            form_states=form_states
+        )
+        
+        return snapshot
+
+    def _handle_rep_completion(self, exercise: str):
+        """Handle all logic that follows a successful rep count."""
+        self.total_reps += 1
+        self.rep_timestamps.append(time.time())
+
+        if self.rep_buffer["in_rep"]:
+            snapshot = self._analyze_rep_buffer(exercise)
+            if snapshot:
+                print(f"FormSnapshot: {snapshot.form_states} | Static: {list(snapshot.static_primitives.keys())} | Dynamic: {list(snapshot.dynamic_primitives.keys())}")
+                self.last_form_snapshot = snapshot
+                self.all_form_snapshots.append(snapshot.to_dict())
+                if self.active_session and self.active_session.current_set:
+                    self.active_session.current_set.add_form_snapshot(snapshot)
+
+                command = self.realtime_form_coach.get_post_rep_command(
+                    exercise, snapshot.form_states
+                )
+                if command:
+                    self.post_rep_command = command
+                    self.post_rep_command_frames = 90
+            self._init_rep_buffer()
+
+        if self.active_session and self.active_session.current_set:
+            self.active_session.record_rep()
 
     def handle_command(self, command_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         command = command_data.get("command")
@@ -762,6 +939,29 @@ class MediaPipe2DPoseBackend(PoseBackend):
             self.last_right_knee_angle = right_knee_angle
 
             exercise = self.selected_exercise or "bicep_curls"
+            
+            # Buffer frame data for form analysis
+            frame_data = {
+                "timestamp": time.time(),
+                "elbow_angle": right_elbow_angle,
+                "knee_angle": right_knee_angle,
+                "primary_angle": right_elbow_angle if exercise == "bicep_curls" else right_knee_angle,
+                "elbow_drift": right_elbow_x - self.elbow_baseline_x if self.elbow_baseline_x else 0,
+                "hip_y": hip_right[1],
+                "knee_x": knee_right[0],
+                "shoulder_z": landmarks[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].z,
+                "torso_angle": calculate_angle(hip_right, shoulder_right, [shoulder_right[0], shoulder_right[1] - 0.5]),
+            }
+            
+            # Start buffering when rep begins
+            if not self.rep_buffer["in_rep"]:
+                if (exercise == "bicep_curls" and self.curl_state == "DOWN") or \
+                   (exercise == "squats" and self.squat_state == "UP"):
+                    # Ready to start a new rep
+                    pass
+            
+            # Buffer the frame
+            self._buffer_frame(frame_data)
 
             # Upper-body reps (all mapped to curl_counter)
             if exercise in ("bicep_curls", "push_up", "lateral_raise", "barbell_row"):
@@ -780,6 +980,11 @@ class MediaPipe2DPoseBackend(PoseBackend):
 
                 if self.curl_state == "DOWN":
                     self.elbow_baseline_x = right_elbow_x
+                    # Start new rep buffer
+                    if not self.rep_buffer["in_rep"]:
+                        self._init_rep_buffer()
+                        self.rep_buffer["in_rep"] = True
+                        self.rep_buffer["start_time"] = time.time()
                     if in_up_position:
                         self.curl_state = "UP"
                     feedback = ""
@@ -789,48 +994,19 @@ class MediaPipe2DPoseBackend(PoseBackend):
                     if in_down_position:
                         self.curl_state = "DOWN"
                         self.curl_counter += 1
-                        print("rep counted")
-                        self.total_reps += 1
-                        self.rep_timestamps.append(time.time())  # Record timestamp for tempo
-                        # Track rep in active session
-                        if self.active_session and self.active_session.current_set:
-                            self.active_session.record_rep()
+                        self._handle_rep_completion(exercise)
                         feedback = ""
-                    else:
-                        stability_threshold = (
-                            self.user_profile["upper_arm_length"] * 0.15
-                            if self.user_profile.get("upper_arm_length")
-                            else 0.05
-                        )
-                        if abs(right_elbow_x - self.elbow_baseline_x) > stability_threshold:
-                            feedback = "Keep elbow stable!"
-                            self.mistake_counter["elbow_stability"] = (
-                                self.mistake_counter.get("elbow_stability", 0) + 1
-                            )
-                            feedback_landmarks = [
-                                mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
-                                mp_pose.PoseLandmark.RIGHT_ELBOW.value,
-                                mp_pose.PoseLandmark.RIGHT_WRIST.value,
-                            ]
-                        elif not in_up_position:
-                            feedback = "Reach full range!"
-                            self.mistake_counter["upper_rom"] = (
-                                self.mistake_counter.get("upper_rom", 0) + 1
-                            )
-                            feedback_landmarks = [
-                                mp_pose.PoseLandmark.RIGHT_SHOULDER.value,
-                                mp_pose.PoseLandmark.RIGHT_ELBOW.value,
-                                mp_pose.PoseLandmark.RIGHT_WRIST.value,
-                            ]
-                        else:
-                            feedback = "Good rep!"
-
-            # Squat reps (mapped to squat_counter)
-            if exercise == "squats":
+                feedback = ""
+            elif exercise == "squats":
                 right_hip_y = hip_right[1]
                 right_knee_y = knee_right[1]
 
                 if self.squat_state == "UP":
+                    # Start new rep buffer
+                    if not self.rep_buffer["in_rep"]:
+                        self._init_rep_buffer()
+                        self.rep_buffer["in_rep"] = True
+                        self.rep_buffer["start_time"] = time.time()
                     if right_knee_angle < (self.squat_down_angle + 20):
                         self.squat_state = "DOWN"
                     if feedback not in ["Keep elbow stable!", "Curl higher!", "Great curl!", "Good rep!"]:
@@ -839,8 +1015,9 @@ class MediaPipe2DPoseBackend(PoseBackend):
                     if right_knee_angle > (self.squat_up_angle - 20):
                         self.squat_state = "UP"
                         self.squat_counter += 1
-                        self.total_reps += 1
-                        self.rep_timestamps.append(time.time())  # Record timestamp for tempo
+                        self._handle_rep_completion(exercise)
+                        feedback = ""
+                        
                         # Track rep in active session
                         if self.active_session and self.active_session.current_set:
                             self.active_session.record_rep()
@@ -880,7 +1057,12 @@ class MediaPipe2DPoseBackend(PoseBackend):
             elif self.selected_exercise == "squats":
                 self._update_calibration_extremes(right_knee_angle)
 
-        angular_features = AngularFeatureExtractor.extract_all_features(landmarks)
+        # Convert landmarks to dict format for feature extraction
+        landmarks_data = [
+            {"x": lm.x, "y": lm.y, "z": lm.z, "visibility": lm.visibility}
+            for lm in landmarks
+        ]
+        angular_features = AngularFeatureExtractor.extract_all_features(landmarks_data)
 
         llm_message = ""
         if feedback and feedback not in ["Adjust camera to show full body"]:
@@ -903,42 +1085,16 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 "critic_level": 0.5,
                 "user_style": "friendly",
             }
-            llm_message = self.llm_feedback.generate_feedback(error_record)
+            # Use realtime coach for tips (no LLM, fast templates)
+            llm_message = self.realtime_coach.get_text_feedback(
+                self.selected_exercise,
+                error_type=self.realtime_coach._detect_error_type(self.selected_exercise, feedback)
+            )
 
-        landmarks_data = [
-            {"x": lm.x, "y": lm.y, "z": lm.z, "visibility": lm.visibility}
-            for lm in landmarks
-        ]
-
-        # Build arrow feedback for visual coaching
-        arrow_feedback = []
-        if feedback and feedback not in ["", "Good rep!", "Great curl!", "Good depth!", "Adjust camera to show full body"]:
-            if self.selected_exercise == "bicep_curls":
-                if "elbow" in feedback.lower():
-                    # Elbow drifting - arrow pointing inward to body
-                    arrow_feedback.append({
-                        "joint_idx": 14,  # Right elbow
-                        "type": "elbow_stability",
-                        "direction": "left",  # Point toward body
-                        "color": "#facc15"  # Yellow
-                    })
-                elif "range" in feedback.lower() or "higher" in feedback.lower():
-                    # Need to curl higher - arrow pointing up
-                    arrow_feedback.append({
-                        "joint_idx": 16,  # Right wrist
-                        "type": "curl_higher",
-                        "direction": "up",
-                        "color": "#facc15"
-                    })
-            elif self.selected_exercise == "squats":
-                if "deeper" in feedback.lower():
-                    # Need to squat deeper - arrow pointing down on hip
-                    arrow_feedback.append({
-                        "joint_idx": 24,  # Right hip
-                        "type": "squat_deeper",
-                        "direction": "down",
-                        "color": "#facc15"
-                    })
+        # Build arrow feedback for visual coaching using RealtimeCoach
+        arrow_feedback = self.realtime_coach.get_arrow_feedback(
+            self.selected_exercise, feedback, landmarks
+        )
 
         data_to_send = {
             "landmarks": landmarks_data,
@@ -958,12 +1114,20 @@ class MediaPipe2DPoseBackend(PoseBackend):
             "metric_rknee_rfeet": rknee_rfeet_dist,
             "metric_rhip_rfeet": rhip_rfeet_dist,
             "feedback": feedback,
-            "llm_feedback": llm_message,
+            "coach_tip": llm_message,  # Realtime coach tip (no LLM)
             "feedback_landmarks": feedback_landmarks,
             "arrow_feedback": arrow_feedback,  # New: structured arrow data
             "kinematic_features": angular_features,
             "backend": self.name,
+            "form_snapshots": self.all_form_snapshots,  # All accumulated form snapshots
+            "post_rep_command": self.post_rep_command if self.post_rep_command_frames > 0 else None,
         }
+        
+        # Decrement post-rep command frame counter
+        if self.post_rep_command_frames > 0:
+            self.post_rep_command_frames -= 1
+            if self.post_rep_command_frames == 0:
+                self.post_rep_command = None
 
         if self.calibration_session:
             data_to_send["calibration_progress"] = {

@@ -46,6 +46,7 @@ def build_pose_backend(name: str) -> PoseBackend:
         )
 
     if backend_cls is PoseProcessor:
+        print("LOLOLOLOL")
         return backend_cls(estimator=MediaPipePoseEstimator())
     else:
         return backend_cls()
