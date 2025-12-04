@@ -18,6 +18,9 @@ from calibration_v2 import (
 from rep_counter_v2 import NormalizedRepCounter
 from form_checker import FormChecker
 from kinematics import KinematicFeatureExtractor
+from session import WorkoutSession, FormSnapshot
+from coaches import FormAnalyzer
+from coaches.realtime_form_coach import get_realtime_form_coach
 
 from filters import KalmanLandmarkSmoother
 from .base import PoseBackend, PoseEstimator
@@ -50,6 +53,174 @@ class PoseProcessor(PoseBackend):
         # The Logic Engines (Separated)
         self.counters: Dict[str, NormalizedRepCounter] = {}
         self.checkers: Dict[str, FormChecker] = {}
+        
+        # Session management
+        self.active_session: Optional[WorkoutSession] = None
+        
+        # Form analysis
+        self.form_analyzer = FormAnalyzer()
+        self.realtime_form_coach = get_realtime_form_coach()
+        
+        # Rep tracking state
+        self.total_reps = 0
+        self.rep_timestamps: List[float] = []
+        self.last_form_snapshot: Optional[FormSnapshot] = None
+        self.all_form_snapshots: List[Dict] = []
+        self.post_rep_command: Optional[str] = None
+        self.post_rep_command_frames: int = 0
+        self.last_rep_count: int = 0  # Track previous rep count to detect new reps
+        
+        # Initialize rep buffer
+        self._init_rep_buffer()
+
+    def _init_rep_buffer(self):
+        """Initialize or clear the buffer for collecting rep data."""
+        self.rep_buffer = {
+            "frames": [],
+            "start_time": None,
+            "in_rep": False,
+            "min_angle": 180,
+            "max_angle": 0,
+            "critical_frame": None,
+        }
+    
+    def _buffer_frame(self, frame_data: Dict[str, Any]):
+        """Add a frame's data to the rep buffer."""
+        self.rep_buffer["frames"].append(frame_data)
+        
+        # Track critical frame (min angle = bottom of movement)
+        angle = frame_data.get("primary_angle", 180)
+        if angle < self.rep_buffer["min_angle"]:
+            self.rep_buffer["min_angle"] = angle
+            self.rep_buffer["critical_frame"] = frame_data
+    
+    def _analyze_rep_buffer(self, exercise: str) -> Optional[FormSnapshot]:
+        """
+        Analyze the buffered rep data and create a FormSnapshot.
+        Returns None if insufficient data.
+        """
+        frames = self.rep_buffer["frames"]
+        if len(frames) < 3:
+            return None
+        
+        critical = self.rep_buffer["critical_frame"] or frames[len(frames) // 2]
+        start_time = self.rep_buffer["start_time"] or time.time()
+        
+        # Calculate static primitives from critical frame
+        static_primitives = {}
+        
+        if exercise == "squats":
+            depth_angle = critical.get("knee_angle", 90)
+            depth_cat = self.form_analyzer.categorize_primitive("squats", "squat_depth", depth_angle)
+            static_primitives["squat_depth"] = {"value": round(depth_angle, 1), "category": depth_cat}
+            
+            torso_angle = critical.get("torso_angle", 0)
+            torso_cat = self.form_analyzer.categorize_primitive("squats", "torso_angle", torso_angle)
+            static_primitives["torso_angle"] = {"value": round(torso_angle, 1), "category": torso_cat}
+            
+        elif exercise == "bicep_curls":
+            flexion_angle = critical.get("elbow_angle", 90)
+            flexion_cat = self.form_analyzer.categorize_primitive("bicep_curls", "peak_flexion", flexion_angle)
+            static_primitives["peak_flexion"] = {"value": round(flexion_angle, 1), "category": flexion_cat}
+            
+            elbow_drift = critical.get("elbow_drift", 0)
+            drift_cat = self.form_analyzer.categorize_primitive("bicep_curls", "elbow_position", abs(elbow_drift))
+            static_primitives["elbow_position"] = {"value": round(abs(elbow_drift), 3), "category": drift_cat}
+        
+        # Calculate dynamic primitives from frame sequence
+        dynamic_primitives = {}
+        
+        if len(frames) >= 2:
+            min_idx = 0
+            for i, f in enumerate(frames):
+                if f.get("primary_angle", 180) == self.rep_buffer["min_angle"]:
+                    min_idx = i
+                    break
+            
+            descent_frames = frames[:min_idx + 1] if min_idx > 0 else frames[:1]
+            ascent_frames = frames[min_idx:] if min_idx < len(frames) - 1 else frames[-1:]
+            
+            if exercise == "squats":
+                if len(descent_frames) >= 2:
+                    descent_time = descent_frames[-1].get("timestamp", 0) - descent_frames[0].get("timestamp", 0)
+                    if descent_time > 0:
+                        descent_speed = abs(descent_frames[-1].get("hip_y", 0) - descent_frames[0].get("hip_y", 0)) / descent_time
+                        descent_cat = self.form_analyzer.categorize_primitive("squats", "descent_speed", descent_speed)
+                        dynamic_primitives["descent_speed"] = {"value": round(descent_speed, 3), "category": descent_cat}
+                
+                if len(ascent_frames) >= 2:
+                    ascent_time = ascent_frames[-1].get("timestamp", 0) - ascent_frames[0].get("timestamp", 0)
+                    if ascent_time > 0:
+                        ascent_speed = abs(ascent_frames[-1].get("hip_y", 0) - ascent_frames[0].get("hip_y", 0)) / ascent_time
+                        ascent_cat = self.form_analyzer.categorize_primitive("squats", "ascent_speed", ascent_speed)
+                        dynamic_primitives["ascent_speed"] = {"value": round(ascent_speed, 3), "category": ascent_cat}
+                
+                knee_positions = [f.get("knee_x", 0) for f in frames]
+                if knee_positions:
+                    knee_deviation = max(knee_positions) - min(knee_positions)
+                    stability_cat = self.form_analyzer.categorize_primitive("squats", "knee_stability", knee_deviation)
+                    dynamic_primitives["knee_stability"] = {"value": round(knee_deviation, 3), "category": stability_cat}
+            
+            elif exercise == "bicep_curls":
+                if len(descent_frames) >= 2:
+                    lift_time = descent_frames[-1].get("timestamp", 0) - descent_frames[0].get("timestamp", 0)
+                    if lift_time > 0:
+                        angle_change = abs(descent_frames[-1].get("elbow_angle", 0) - descent_frames[0].get("elbow_angle", 0))
+                        lift_speed = angle_change / lift_time
+                        lift_cat = self.form_analyzer.categorize_primitive("bicep_curls", "lift_speed", lift_speed)
+                        dynamic_primitives["lift_speed"] = {"value": round(lift_speed, 1), "category": lift_cat}
+                
+                shoulder_positions = [f.get("shoulder_z", 0) for f in frames]
+                if shoulder_positions:
+                    swing = max(shoulder_positions) - min(shoulder_positions)
+                    swing_cat = self.form_analyzer.categorize_primitive("bicep_curls", "swing_momentum", swing)
+                    dynamic_primitives["swing_momentum"] = {"value": round(swing, 3), "category": swing_cat}
+        
+        # Determine form states
+        all_primitives = {}
+        for name, data in static_primitives.items():
+            all_primitives[name] = data.get("category", "unknown")
+        for name, data in dynamic_primitives.items():
+            all_primitives[name] = data.get("category", "unknown")
+        
+        form_states = self.form_analyzer.determine_form_states(exercise, all_primitives)
+        
+        # Get rep count from counter
+        rep_number = self.counters[exercise].state.rep_count if exercise in self.counters else self.total_reps
+        
+        snapshot = FormSnapshot(
+            rep_number=rep_number,
+            timestamp=start_time,
+            static_primitives=static_primitives,
+            dynamic_primitives=dynamic_primitives,
+            form_states=form_states
+        )
+        
+        return snapshot
+
+    def _handle_rep_completion(self, exercise: str):
+        """Handle all logic that follows a successful rep count."""
+        self.total_reps += 1
+        self.rep_timestamps.append(time.time())
+
+        if self.rep_buffer["in_rep"]:
+            snapshot = self._analyze_rep_buffer(exercise)
+            if snapshot:
+                print(f"FormSnapshot: {snapshot.form_states} | Static: {list(snapshot.static_primitives.keys())} | Dynamic: {list(snapshot.dynamic_primitives.keys())}")
+                self.last_form_snapshot = snapshot
+                self.all_form_snapshots.append(snapshot.to_dict())
+                
+                if self.active_session and self.active_session.current_set:
+                    self.active_session.current_set.add_form_snapshot(snapshot)
+
+                command = self.realtime_form_coach.get_post_rep_command(
+                    exercise, snapshot.form_states
+                )
+                if command:
+                    self.post_rep_command = command
+                    self.post_rep_command_frames = 90
+            
+            self._init_rep_buffer()
 
     def handle_command(self, command_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         command = command_data.get("command")
@@ -185,6 +356,135 @@ class PoseProcessor(PoseBackend):
             self.current_mode = command_data.get("mode", "common")
             return {"event": "mode_updated", "mode": self.current_mode}
 
+        # ==================== SESSION COMMANDS ====================
+        
+        if command == "start_session":
+            # Start a new workout session
+            # Payload: {"command": "start_session", "sets": [
+            #   {"exercise": "squats", "reps": 10},
+            #   {"exercise": "bicep_curls", "reps": 12}
+            # ], "name": "My Workout"}
+            sets_config = command_data.get("sets", [])
+            session_name = command_data.get("name", "Workout")
+            
+            if not sets_config:
+                return {
+                    "event": "session_error",
+                    "message": "No sets provided. Include 'sets' array with exercise and reps."
+                }
+            
+            # Validate exercises
+            valid_exercises = {"bicep_curls", "squats"}
+            for s in sets_config:
+                if s.get("exercise") not in valid_exercises:
+                    return {
+                        "event": "session_error",
+                        "message": f"Invalid exercise: {s.get('exercise')}. Valid: {valid_exercises}"
+                    }
+            
+            self.active_session = WorkoutSession.from_config(sets_config, name=session_name)
+            self.active_session.start()
+            
+            # Set the current exercise and reset counter
+            if self.active_session.current_exercise:
+                self.selected_exercise = self.active_session.current_exercise
+                if self.selected_exercise in self.counters:
+                    self.counters[self.selected_exercise].reset()
+            
+            return {
+                "event": "session_started",
+                "session": self.active_session.to_dict(),
+                "progress": self.active_session.get_progress(),
+            }
+        
+        if command == "next_set":
+            # Advance to the next set in the session
+            if not self.active_session:
+                return {
+                    "event": "session_error",
+                    "message": "No active session. Start a session first."
+                }
+            
+            next_set = self.active_session.advance_to_next_set()
+            
+            if next_set:
+                # Switch to the new exercise
+                self.selected_exercise = next_set.exercise
+                if self.selected_exercise in self.counters:
+                    self.counters[self.selected_exercise].reset()
+                
+                return {
+                    "event": "set_started",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+            else:
+                # Session complete
+                return {
+                    "event": "session_complete",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+        
+        if command == "skip_set":
+            # Skip current set and move to next
+            if not self.active_session:
+                return {
+                    "event": "session_error",
+                    "message": "No active session."
+                }
+            
+            next_set = self.active_session.skip_current_set()
+            
+            if next_set:
+                self.selected_exercise = next_set.exercise
+                if self.selected_exercise in self.counters:
+                    self.counters[self.selected_exercise].reset()
+                
+                return {
+                    "event": "set_skipped",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+            else:
+                return {
+                    "event": "session_complete",
+                    "session": self.active_session.to_dict(),
+                    "progress": self.active_session.get_progress(),
+                }
+        
+        if command == "get_session_progress":
+            # Get current session status
+            if not self.active_session:
+                return {
+                    "event": "session_progress",
+                    "active": False,
+                    "progress": None,
+                }
+            
+            return {
+                "event": "session_progress",
+                "active": True,
+                "progress": self.active_session.get_progress(),
+            }
+        
+        if command == "end_session":
+            # End the current session early
+            if not self.active_session:
+                return {
+                    "event": "session_error",
+                    "message": "No active session to end."
+                }
+            
+            self.active_session.finish()
+            summary = self.active_session.to_dict()
+            self.active_session = None
+            print(summary)
+            return {
+                "event": "session_ended",
+                "session": summary,
+            }
+
         return None
 
     def process_frame(self, frame_bgr: np.ndarray) -> Optional[Dict[str, Any]]:
@@ -221,7 +521,38 @@ class PoseProcessor(PoseBackend):
             payload["rep_count"] = rep_state.rep_count
             payload["rep_phase"] = rep_state.phase
 
-            # B. Form Engine (Strict / Adaptive)
+            # B. Rep buffer management for form analysis
+            # Build frame data for buffering
+            frame_data = {
+                "timestamp": time.time(),
+                "primary_angle": metrics["primary"],
+                "elbow_angle": metrics["form"].get("elbow_angle", metrics["primary"]) if self.selected_exercise == "bicep_curls" else 0,
+                "knee_angle": metrics["form"].get("knee_angle", metrics["primary"]) if self.selected_exercise == "squats" else 0,
+                "torso_angle": metrics["form"].get("torso_angle", 0),
+                "elbow_drift": metrics["form"].get("elbow_drift", 0),
+                "hip_y": metrics["form"].get("hip_y", 0),
+                "knee_x": metrics["form"].get("knee_x", 0),
+                "shoulder_z": metrics["form"].get("shoulder_z", 0),
+            }
+            
+            # Start buffering when entering the movement phase
+            if rep_state.phase in ["DOWN_PHASE", "UP_PHASE"]:
+                if not self.rep_buffer["in_rep"]:
+                    self.rep_buffer["in_rep"] = True
+                    self.rep_buffer["start_time"] = time.time()
+                self._buffer_frame(frame_data)
+            
+            # Detect rep completion (rep count increased)
+            if rep_state.rep_count > self.last_rep_count:
+                self._handle_rep_completion(self.selected_exercise)
+                
+                # Track rep in active session
+                if self.active_session and self.active_session.current_set:
+                    self.active_session.current_set.add_rep()
+            
+            self.last_rep_count = rep_state.rep_count
+
+            # C. Form Engine (Strict / Adaptive)
             # Rates quality based on 'critic' and 'capabilities'
             if self.selected_exercise in self.checkers:
                 checker = self.checkers[self.selected_exercise]
@@ -235,6 +566,17 @@ class PoseProcessor(PoseBackend):
 
                 if feedback_msgs:
                     payload["feedback"] = " ".join(feedback_msgs)
+            
+            # D. Post-rep command display (countdown frames)
+            if self.post_rep_command_frames > 0:
+                payload["post_rep_command"] = self.post_rep_command
+                self.post_rep_command_frames -= 1
+                if self.post_rep_command_frames == 0:
+                    self.post_rep_command = None
+            
+            # E. Include form snapshots in payload
+            if self.all_form_snapshots:
+                payload["form_snapshots"] = self.all_form_snapshots
 
         # 4. Calibration Pipeline
         if self.calibration_session:
