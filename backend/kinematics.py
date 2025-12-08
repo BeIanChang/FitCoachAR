@@ -108,105 +108,125 @@ Implements 3D angle calculation and normalized spatial features.
 
 
 class KinematicFeatureExtractor:
-    """
-    Extracts geometric features (angles, normalized distances) from pose landmarks.
-    """
-
-    @staticmethod
-    def _get_coords(landmarks, idx):
-        # Handle list-of-dicts format [{"x":...}, ...]
-        lm = landmarks[idx]
-        return np.array([lm["x"], lm["y"], lm["z"]])
-
-    @staticmethod
-    def _compute_distance(p1, p2):
-        return np.linalg.norm(p1 - p2)
-
-    @staticmethod
-    def compute_joint_angle(a, b, c):
-        """Compute 3D angle at joint b."""
-        ba = a - b
-        bc = c - b
-        norm_ba = np.linalg.norm(ba)
-        norm_bc = np.linalg.norm(bc)
-        if norm_ba < 1e-6 or norm_bc < 1e-6:
-            return 0.0
-        cosine = np.dot(ba, bc) / (norm_ba * norm_bc)
-        return np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
-
-    @staticmethod
-    def compute_vertical_angle(p1, p2):
-        """Compute angle of vector p1->p2 against vertical Y-axis."""
-        vec = p2 - p1
-        norm = np.linalg.norm(vec)
-        if norm < 1e-6: return 0.0
-        # MediaPipe Y is inverted? Assuming standard Y-up for calculation logic
-        vertical = np.array([0, 1, 0])
-        cosine = np.dot(vec, vertical) / norm
-        return np.degrees(np.arccos(np.abs(cosine)))
-
-    @staticmethod
-    def extract_metrics(landmarks, landmark_dict, exercise_type):
         """
-        Returns { "primary": float, "form": { ... } }
+        Extracts geometric features (angles, normalized distances) from pose landmarks.
         """
-        helper = KinematicFeatureExtractor
-        lms = landmarks
 
-        # 1. Scale Factor (Shoulder Width)
-        try:
-            l_shldr = helper._get_coords(lms, landmark_dict["LEFT_SHOULDER"])
-            r_shldr = helper._get_coords(lms, landmark_dict["RIGHT_SHOULDER"])
-            shoulder_width = helper._compute_distance(l_shldr, r_shldr)
-            scale = 1.0 / shoulder_width if shoulder_width > 0.01 else 1.0
-        except (IndexError, KeyError):
-            return {"primary": 0.0, "form": {}}
+        @staticmethod
+        def _get_coords(landmarks, idx):
+            # Handle list-of-dicts format [{"x":...}, ...]
+            lm = landmarks[idx]
+            # Wir geben ein np.array (x, y, z) zurück
+            return np.array([lm["x"], lm["y"], lm["z"]])
 
-        ex = exercise_type.lower()
-        metrics = {"primary": 0.0, "form": {}}
+        @staticmethod
+        def _compute_distance(p1, p2):
+            return np.linalg.norm(p1 - p2)
 
-        # --- BICEP CURL ---
-        if "curl" in ex:
-            # Use Right side by default for now
-            p = lambda name: helper._get_coords(lms, landmark_dict[name])
+        @staticmethod
+        def compute_joint_angle(a, b, c):
+            """Compute 3D angle at joint b."""
+            ba = a - b
+            bc = c - b
+            norm_ba = np.linalg.norm(ba)
+            norm_bc = np.linalg.norm(bc)
+            if norm_ba < 1e-6 or norm_bc < 1e-6:
+                return 0.0
+            cosine = np.dot(ba, bc) / (norm_ba * norm_bc)
+            return np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
 
-            # Primary: Elbow Angle
-            metrics["primary"] = helper.compute_joint_angle(
-                p("RIGHT_SHOULDER"), p("RIGHT_ELBOW"), p("RIGHT_WRIST")
-            )
+        @staticmethod
+        def compute_vertical_angle(p1, p2):
+            """Compute angle of vector p1->p2 against vertical Y-axis."""
+            vec = p2 - p1
+            norm = np.linalg.norm(vec)
+            if norm < 1e-6: return 0.0
+            # MediaPipe Y is down (positive Y = lower in image). 
+            # vertical = np.array([0, 1, 0]) refers to the world's up vector (which is -Y in MP coordinates).
+            vertical = np.array([0, -1, 0]) # Adjusted for MP coordinates (vertical UP in image space)
+            
+            # Angle between limb and vertical axis
+            cosine = np.dot(vec, vertical) / norm
+            return np.degrees(np.arccos(np.abs(cosine)))
 
-            # Form: Elbow Drift (Normalized)
-            elbow_dist = helper._compute_distance(p("RIGHT_SHOULDER"), p("RIGHT_ELBOW"))
-            metrics["form"]["elbow_stability"] = elbow_dist * scale
+        @staticmethod
+        def extract_metrics(landmarks, landmark_dict, exercise_type):
+            """
+            Returns { "primary": float, "form": { ... } }
+            """
+            helper = KinematicFeatureExtractor
+            lms = landmarks
 
-            # Form: Torso Swing
-            metrics["form"]["torso_swing"] = helper.compute_vertical_angle(
-                p("RIGHT_SHOULDER"), p("RIGHT_HIP")
-            )
+            # 1. Scale Factor (Shoulder Width)
+            try:
+                p = lambda name: helper._get_coords(lms, landmark_dict[name])
+                
+                l_shldr = p("LEFT_SHOULDER")
+                r_shldr = p("RIGHT_SHOULDER")
+                shoulder_width = helper._compute_distance(l_shldr, r_shldr)
+                scale = 1.0 / shoulder_width if shoulder_width > 0.01 else 1.0
+            except (IndexError, KeyError):
+                return {"primary": 0.0, "form": {}}
 
-        # --- SQUAT ---
-        elif "squat" in ex:
-            p = lambda name: helper._get_coords(lms, landmark_dict[name])
+            ex = exercise_type.lower()
+            metrics = {"primary": 0.0, "form": {}}
 
-            # Primary: Knee Angle
-            metrics["primary"] = helper.compute_joint_angle(
-                p("LEFT_HIP"), p("LEFT_KNEE"), p("LEFT_ANKLE")
-            )
+            # --- BICEP CURL ---
+            if "curl" in ex:
+                # Primary (Counting): Elbow Angle (Angle decreases when arm is pulled up, so LOW angle is UP-Pose)
+                metrics["primary"] = helper.compute_joint_angle(
+                    p("RIGHT_SHOULDER"), p("RIGHT_ELBOW"), p("RIGHT_WRIST")
+                )
 
-            # Form: Knee Valgus (Knee Width / Ankle Width)
-            kw = helper._compute_distance(p("LEFT_KNEE"), p("RIGHT_KNEE"))
-            aw = helper._compute_distance(p("LEFT_ANKLE"), p("RIGHT_ANKLE"))
-            metrics["form"]["knee_valgus_index"] = kw / aw if aw > 0.01 else 1.0
+                # Form (Constraints):
+                metrics["form"]["elbow_stability"] = helper._compute_distance(p("RIGHT_SHOULDER"), p("RIGHT_ELBOW")) * scale
+                metrics["form"]["torso_swing"] = helper.compute_vertical_angle(p("RIGHT_SHOULDER"), p("RIGHT_HIP"))
 
-            # Form: Torso Lean
-            metrics["form"]["torso_lean"] = helper.compute_vertical_angle(
-                p("LEFT_HIP"), p("LEFT_SHOULDER")
-            )
+            # --- SQUAT ---
+            elif "squat" in ex:
+                # Primary (Counting): Inverted Hip Y-Coordinate (Y is down in MP. We negate it so DOWN position gives a SMALLER value, consistent with theta_low)
+                # UP = Stand (low Y-value in MP -> high Primary)
+                # DOWN = Hocke (high Y-value in MP -> low Primary after negation)
+                
+                hip_y_mp = p("LEFT_HIP")[1] 
+                metrics["primary"] = -hip_y_mp * scale # Normalized and Inverted
 
-            # Form: Hip Symmetry (Vertical diff)
-            metrics["form"]["hip_symmetry"] = abs(p("LEFT_HIP")[1] - p("RIGHT_HIP")[1]) * scale
+                # Form (Constraints):
+                metrics["form"]["knee_angle"] = helper.compute_joint_angle(p("LEFT_HIP"), p("LEFT_KNEE"), p("LEFT_ANKLE"))
+                metrics["form"]["torso_lean"] = helper.compute_vertical_angle(p("LEFT_HIP"), p("LEFT_SHOULDER"))
+                metrics["form"]["knee_valgus_index"] = helper._compute_distance(p("LEFT_KNEE"), p("RIGHT_KNEE")) / helper._compute_distance(p("LEFT_ANKLE"), p("RIGHT_ANKLE"))
+                metrics["form"]["hip_symmetry"] = abs(p("LEFT_HIP")[1] - p("RIGHT_HIP")[1]) * scale
 
-        return metrics
+            # --- PUSH UP ---
+            elif "push" in ex:
+                # Primary (Counting): Inverted Chest/Nose Y-Coordinate (DOWN position is high Y-value in MP -> low Primary after negation)
+                
+                chest_y_mp = p("NOSE")[1] # Using Nose/Shoulder Line as proxy for Chest position
+                metrics["primary"] = -chest_y_mp * scale # Normalized and Inverted
+
+                # Form (Constraints):
+                metrics["form"]["elbow_angle"] = helper.compute_joint_angle(p("RIGHT_SHOULDER"), p("RIGHT_ELBOW"), p("RIGHT_WRIST"))
+                # Torso angle (Shoulder-Hip-Knee/Ankle) to check for straight body
+                hip_angle = helper.compute_joint_angle(p("RIGHT_SHOULDER"), p("RIGHT_HIP"), p("RIGHT_KNEE"))
+                metrics["form"]["hip_stability_angle"] = 180.0 - hip_angle # should be close to 0
+
+            # --- LUNGE ---
+            elif "lunge" in ex:
+                # Primary (Counting): Inverted Vertical Distance of HIND KNEE to the floor (low value = knee near ground)
+                # We approximate 'floor' by the ankle Y coordinate of the *front* foot.
+                
+                front_ankle_y = p("LEFT_ANKLE")[1] # Assuming LEFT is front
+                hind_knee_y = p("RIGHT_KNEE")[1] 
+                
+                # The distance is hind_knee_y - front_ankle_y (positive when knee is above ankle)
+                # We negate it so DOWN (small distance) results in a SMALLER value (low Primary after negation)
+                metrics["primary"] = -(hind_knee_y - front_ankle_y) * scale # Normalized and Inverted
+                
+                # Form (Constraints):
+                metrics["form"]["front_knee_angle"] = helper.compute_joint_angle(p("LEFT_HIP"), p("LEFT_KNEE"), p("LEFT_ANKLE"))
+                metrics["form"]["hip_symmetry"] = abs(p("LEFT_HIP")[1] - p("RIGHT_HIP")[1]) * scale
+
+            return metrics
 
 class AngularFeatureExtractor:
     """

@@ -70,6 +70,10 @@ class RepSegment:
     bottom_val: float
     top_val: float
     duration_seconds: float
+    
+    # NEW: Store form metrics exactly at the bottom point (start_idx)
+    # This allows us to see what the user's form looked like at the hardest part of the rep.
+    form_at_bottom: Dict[str, float] = field(default_factory=dict)
 
     # Phase Timings
     phase_1_duration: float = 0.0  # Descent / Eccentric
@@ -86,11 +90,14 @@ class CalibrationParams:
     t_max: float
 
     # --- Adaptive Feedback Parameters ---
-    # [CRITICAL] This is the field causing your error. It must be present.
     capabilities: Dict[str, float] = field(default_factory=dict)
     form_constraints: Dict[str, Dict[str, float]] = field(default_factory=dict)
     tempo_profile: Dict[str, float] = field(default_factory=dict)
     symmetry_profile: Dict[str, float] = field(default_factory=dict)
+    
+    # NEW: Stores the Median values of form metrics at the calibrated Bottom-ROM.
+    # This acts as the "Gold Standard" or "Norm" for form validation during live counting.
+    normative_constraints: Dict[str, float] = field(default_factory=dict)
 
     # Legacy fields
     theta_low_median: Optional[float] = None
@@ -106,7 +113,8 @@ class CalibrationParams:
             "capabilities": self.capabilities,
             "form_constraints": self.form_constraints,
             "tempo_profile": self.tempo_profile,
-            "symmetry_profile": self.symmetry_profile
+            "symmetry_profile": self.symmetry_profile,
+            "normative_constraints": self.normative_constraints,
         }
         if self.theta_low_median is not None:
             data["theta_low_median"] = self.theta_low_median
@@ -116,7 +124,6 @@ class CalibrationParams:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> "CalibrationParams":
-        # This handles migration of old files by providing defaults
         return CalibrationParams(
             theta_low=float(data["theta_low"]),
             theta_high=float(data["theta_high"]),
@@ -127,6 +134,7 @@ class CalibrationParams:
             form_constraints=data.get("form_constraints", {}),
             tempo_profile=data.get("tempo_profile", {}),
             symmetry_profile=data.get("symmetry_profile", {}),
+            normative_constraints=data.get("normative_constraints", {}),
             theta_low_median=float(data.get("theta_low_median", 0)) if "theta_low_median" in data else None,
             theta_high_median=float(data.get("theta_high_median", 0)) if "theta_high_median" in data else None,
         )
@@ -138,6 +146,8 @@ class CalibrationResult:
     rep_segments: List[RepSegment]
     extrema: List[Tuple[int, float, str]]
     smoothed_signal: np.ndarray
+    # NEW: Store raw data points for visualization or debugging
+    raw_form_series: Dict[str, List[float]] = field(default_factory=dict)
 
 
 @dataclass
@@ -307,6 +317,8 @@ def _segment_reps(extrema: List[Tuple[int, float, str]], fps: float) -> List[Rep
                 duration_seconds=max(0.0, (end_idx - start_idx) / fps),
                 phase_1_duration=max(0.0, (peak_idx - start_idx) / fps),
                 phase_2_duration=max(0.0, (end_idx - peak_idx) / fps)
+                # Note: form_at_bottom is filled later in calibrate_from_landmarks 
+                # because we don't have access to the raw form series here.
             ))
 
     return reps
@@ -318,6 +330,8 @@ def calibrate_from_landmarks(
         exercise: str,
         smoothing_window: int = 5,
         fps: float = 30.0,
+        theta_low_factor: float = 0.3,
+        theta_high_factor: float = 3.0,
 ) -> CalibrationResult:
     """
     Derive calibration parameters: Counting Thresholds, User Capabilities, Form Constraints.
@@ -361,7 +375,26 @@ def calibrate_from_landmarks(
         avg_ratio = float(np.mean(ratios)) if ratios else 1.0
         tempo_profile = {"concentric_eccentric_ratio": avg_ratio}
 
-    # 3. Analyze Form Signals
+        # NEW: Fill RepSegment.form_at_bottom and collect normative constraints
+        # We look up the form metrics at the specific index where the rep bottomed out (start_idx).
+        form_at_bottom_list = []
+        for rep in reps:
+            form_dict = {}
+            for metric_name, series in form_signals.items():
+                if rep.start_idx < len(series):
+                    form_dict[metric_name] = series[rep.start_idx]
+            rep.form_at_bottom = form_dict
+            form_at_bottom_list.append(form_dict)
+
+        # NEW: Calculate Normative Constraints (Median of form metrics at lowest point)
+        normative_constraints = {}
+        if form_at_bottom_list:
+            for metric_name in form_signals.keys():
+                values = [d.get(metric_name) for d in form_at_bottom_list if metric_name in d]
+                if values:
+                    normative_constraints[metric_name] = float(np.median(values))
+
+    # 3. Analyze Form Signals (Statistical overview of the whole session)
     form_constraints = {}
     symmetry_profile = {}
 
@@ -384,13 +417,20 @@ def calibrate_from_landmarks(
         theta_low=theta_low,
         theta_high=theta_high,
         t_med=t_med,
-        t_min=0.3 * t_med,
-        t_max=3.0 * t_med,
+        t_min=theta_low_factor * t_med,
+        t_max=theta_high_factor * t_med,
         capabilities=capabilities,
         form_constraints=form_constraints,
         tempo_profile=tempo_profile,
         symmetry_profile=symmetry_profile,
+        normative_constraints=normative_constraints if reps else {}, # NEW: Pass the calculated norms
         theta_low_median=float(np.median([r.bottom_val for r in reps])) if reps else theta_low,
         theta_high_median=float(np.median([r.top_val for r in reps])) if reps else theta_high,
     )
-    return CalibrationResult(params=params, rep_segments=reps, extrema=extrema, smoothed_signal=primary_signal)
+    return CalibrationResult(
+        params=params, 
+        rep_segments=reps, 
+        extrema=extrema, 
+        smoothed_signal=primary_signal,
+        raw_form_series=form_signals # Store raw data for debugging
+    )
