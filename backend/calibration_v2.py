@@ -330,8 +330,8 @@ def calibrate_from_landmarks(
         exercise: str,
         smoothing_window: int = 5,
         fps: float = 30.0,
-        theta_low_factor: float = 0.3,
-        theta_high_factor: float = 3.0,
+        t_low_factor: float = 0.5, # Multiplier for median tempo to get min tempo 
+        t_high_factor: float = 2.0, # Multiplier for median tempo to get min tempo 
 ) -> CalibrationResult:
     """
     Derive calibration parameters: Counting Thresholds, User Capabilities, Form Constraints.
@@ -417,8 +417,8 @@ def calibrate_from_landmarks(
         theta_low=theta_low,
         theta_high=theta_high,
         t_med=t_med,
-        t_min=theta_low_factor * t_med,
-        t_max=theta_high_factor * t_med,
+        t_min=t_low_factor * t_med,
+        t_max=t_high_factor * t_med,
         capabilities=capabilities,
         form_constraints=form_constraints,
         tempo_profile=tempo_profile,
