@@ -3,6 +3,9 @@
 .DS_Store
 backend/calibrations.json
 
+# Virtual env / caches
+backend/venv/
+
 # Large experiment artifacts
 fit3d_results/
 framewise_results*/
@@ -12,3 +15,24 @@ framewise_dataset_kpts*/
 framewise_metrics*/***
 fit3d_lifter_preds/
 fit3d_romp_preds/
+
+<<<<<<< HEAD
+# Large experiment artifacts
+fit3d_results/
+framewise_results*/
+framewise_kpts*/
+framewise_datset_kpts*/
+framewise_dataset_kpts*/
+framewise_metrics*/***
+fit3d_lifter_preds/
+fit3d_romp_preds/
+=======
+.env
+
+**/venv/
+backend/workouts/
+backend/llm_logs/
+
+
+__pycache__
+>>>>>>> refs/remotes/origin/main

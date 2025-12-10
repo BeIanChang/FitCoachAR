@@ -39,6 +39,7 @@ const MOVENET_JOINTS = {
 export default function AROverlay({ 
   landmarks, 
   feedbackLandmarks = [],
+  arrowFeedback = [],  // New: structured arrow data from backend
   selectedExercise,
   targetAngles = {},
   currentAngles = {},
@@ -130,53 +131,66 @@ export default function AROverlay({
       }
     }
 
-    // Draw directional arrows for correction guidance
-    feedbackLandmarks.forEach(idx => {
-      const lm = landmarks[idx];
+    // Draw directional arrows for correction guidance (using structured arrow data)
+    const drawArrow = (x, y, direction, color, size = 40) => {
+      const directions = {
+        up: { dx: 0, dy: -size },
+        down: { dx: 0, dy: size },
+        left: { dx: -size, dy: 0 },
+        right: { dx: size, dy: 0 },
+        up_left: { dx: -size * 0.7, dy: -size * 0.7 },
+        up_right: { dx: size * 0.7, dy: -size * 0.7 },
+        down_left: { dx: -size * 0.7, dy: size * 0.7 },
+        down_right: { dx: size * 0.7, dy: size * 0.7 },
+      };
+
+      const dir = directions[direction] || { dx: 0, dy: -size };
+      
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = 4;
+
+      // Arrow shaft
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + dir.dx, y + dir.dy);
+      ctx.stroke();
+
+      // Arrow head (larger, more visible)
+      const headLength = 15;
+      const angle = Math.atan2(dir.dy, dir.dx);
+      ctx.beginPath();
+      ctx.moveTo(x + dir.dx, y + dir.dy);
+      ctx.lineTo(
+        x + dir.dx - headLength * Math.cos(angle - Math.PI / 5),
+        y + dir.dy - headLength * Math.sin(angle - Math.PI / 5)
+      );
+      ctx.lineTo(
+        x + dir.dx - headLength * Math.cos(angle + Math.PI / 5),
+        y + dir.dy - headLength * Math.sin(angle + Math.PI / 5)
+      );
+      ctx.closePath();
+      ctx.fill();
+
+      // Add glow effect for visibility
+      ctx.shadowColor = color;
+      ctx.shadowBlur = 10;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    };
+
+    // Draw arrows from backend feedback
+    arrowFeedback.forEach(arrow => {
+      const lm = landmarks[arrow.joint_idx];
       if (!lm || lm.visibility < VISIBILITY_THRESHOLD) return;
 
       const x = lm.x * canvas.width;
       const y = lm.y * canvas.height;
-
-      // Draw arrow based on exercise and joint
-      let arrowDirection = { dx: 0, dy: 0 };
       
-      if (selectedExercise === 'bicep_curls' && idx === joints.rightElbow) { // Right elbow
-        arrowDirection = { dx: 0, dy: -30 }; // Point upward for curl
-      } else if (selectedExercise === 'squats' && idx === joints.rightKnee) { // Right knee
-        arrowDirection = { dx: 0, dy: 30 }; // Point downward for depth
-      }
-
-      if (arrowDirection.dx !== 0 || arrowDirection.dy !== 0) {
-        ctx.strokeStyle = '#facc15'; // Yellow arrow
-        ctx.fillStyle = '#facc15';
-        ctx.lineWidth = 3;
-
-        // Arrow shaft
-        ctx.beginPath();
-        ctx.moveTo(x, y);
-        ctx.lineTo(x + arrowDirection.dx, y + arrowDirection.dy);
-        ctx.stroke();
-
-        // Arrow head
-        const headLength = 10;
-        const angle = Math.atan2(arrowDirection.dy, arrowDirection.dx);
-        ctx.beginPath();
-        ctx.moveTo(x + arrowDirection.dx, y + arrowDirection.dy);
-        ctx.lineTo(
-          x + arrowDirection.dx - headLength * Math.cos(angle - Math.PI / 6),
-          y + arrowDirection.dy - headLength * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-          x + arrowDirection.dx - headLength * Math.cos(angle + Math.PI / 6),
-          y + arrowDirection.dy - headLength * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fill();
-      }
+      drawArrow(x, y, arrow.direction, arrow.color || '#facc15', 45);
     });
 
-  }, [landmarks, feedbackLandmarks, selectedExercise, targetAngles, currentAngles, backendKey]);
+  }, [landmarks, feedbackLandmarks, arrowFeedback, selectedExercise, targetAngles, currentAngles, backendKey]);
 
   return (
     <canvas
