@@ -1,3 +1,4 @@
+import os
 import numpy as np
 from scipy.signal import savgol_filter
 from pykalman import KalmanFilter
@@ -7,6 +8,8 @@ class KalmanLandmarkSmoother:
     """Applies a Kalman filter to smooth landmark trajectories."""
 
     def __init__(self):
+        # When FIT3D_RAW_LANDMARKS=1, bypass smoothing and return raw landmarks.
+        self.disabled = os.getenv("FIT3D_RAW_LANDMARKS", "0") == "1"
         self.kalman_filters = {}
 
     def _get_filter(self, landmark_index):
@@ -35,6 +38,10 @@ class KalmanLandmarkSmoother:
         """Smooths a list of landmarks from a single frame."""
         if not landmarks:
             return []
+
+        if self.disabled:
+            # Return landmarks as-is (no temporal smoothing).
+            return landmarks
 
         smoothed_landmarks = []
         for i, lm in enumerate(landmarks):
@@ -77,6 +84,8 @@ class KalmanLandmarkSmoother:
 class LandmarkSmoother:
     """Uses Savitzky-Golay filtering to smooth landmark trajectories."""
     def __init__(self, window_length=5, polyorder=2):
+        # When FIT3D_RAW_LANDMARKS=1, bypass smoothing and return raw landmarks.
+        self.disabled = os.getenv("FIT3D_RAW_LANDMARKS", "0") == "1"
         self.window_length = window_length
         self.polyorder = polyorder
         self.history = {}
@@ -85,6 +94,9 @@ class LandmarkSmoother:
         """Smooths a list of landmarks from a single frame."""
         if not landmarks:
             return []
+
+        if self.disabled:
+            return landmarks
 
         # Add current landmarks to history
         for i, lm in enumerate(landmarks):

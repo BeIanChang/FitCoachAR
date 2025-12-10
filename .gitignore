@@ -2,3 +2,13 @@
 /dataset/
 .DS_Store
 backend/calibrations.json
+
+# Large experiment artifacts
+fit3d_results/
+framewise_results*/
+framewise_kpts*/
+framewise_datset_kpts*/
+framewise_dataset_kpts*/
+framewise_metrics*/***
+fit3d_lifter_preds/
+fit3d_romp_preds/
