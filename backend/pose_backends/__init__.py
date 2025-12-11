@@ -30,6 +30,7 @@ _register("pose_processor_2d", "PoseProcessor")
 _register("mediapipe3d", "MediaPipe3DBackend")
 _register("movenet3d", "MoveNet3DBackend")
 _register("mmpose_lifter", "MMPosePoseLifterBackend")
+_register("hrnet2d", "HRNet2DPoseBackend")
 
 
 def get_available_backends():

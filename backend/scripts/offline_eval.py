@@ -128,6 +128,8 @@ def extract_rep_counts(result: Dict[str, object]) -> Tuple[Optional[int], Option
 def evaluate_video_with_backend(
     meta: VideoMeta,
     backend_name: str,
+    start_frame: Optional[int] = None,
+    end_frame: Optional[int] = None,
 ) -> Dict[str, object]:
     """
     Run a single backend on a single video and compute basic metrics.
@@ -146,10 +148,13 @@ def evaluate_video_with_backend(
         raise RuntimeError(f"Failed to open video: {meta.path}")
 
     frame_count = 0
+    frame_index = 0  # 1-based index of frames read from the video
     total_proc_time = 0.0
     last_result: Dict[str, object] = {}
-    elbow_series: List[float] = []
-    knee_series: List[float] = []
+    elbow_R_series: List[float] = []
+    elbow_L_series: List[float] = []
+    knee_R_series: List[float] = []
+    knee_L_series: List[float] = []
     shl_series: List[float] = []
     rshl_rpalm_series: List[float] = []
     rshl_rhip_series: List[float] = []
@@ -162,6 +167,14 @@ def evaluate_video_with_backend(
         ok, frame = cap.read()
         if not ok:
             break
+        frame_index += 1
+
+        # Optional cropping by frame index: only process [start_frame, end_frame].
+        if start_frame is not None and frame_index < start_frame:
+            continue
+        if end_frame is not None and frame_index > end_frame:
+            break
+
         frame_count += 1
 
         t0 = time.perf_counter()
@@ -173,15 +186,25 @@ def evaluate_video_with_backend(
 
         if result:
             last_result = result
-            # Collect angle trajectories when available
+            # Collect angle trajectories when available (right & left)
             try:
                 if "right_elbow_angle" in result and result["right_elbow_angle"] is not None:  # type: ignore[index]
-                    elbow_series.append(float(result["right_elbow_angle"]))  # type: ignore[arg-type]
+                    elbow_R_series.append(float(result["right_elbow_angle"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "left_elbow_angle" in result and result["left_elbow_angle"] is not None:  # type: ignore[index]
+                    elbow_L_series.append(float(result["left_elbow_angle"]))  # type: ignore[arg-type]
             except Exception:
                 pass
             try:
                 if "right_knee_angle" in result and result["right_knee_angle"] is not None:  # type: ignore[index]
-                    knee_series.append(float(result["right_knee_angle"]))  # type: ignore[arg-type]
+                    knee_R_series.append(float(result["right_knee_angle"]))  # type: ignore[arg-type]
+            except Exception:
+                pass
+            try:
+                if "left_knee_angle" in result and result["left_knee_angle"] is not None:  # type: ignore[index]
+                    knee_L_series.append(float(result["left_knee_angle"]))  # type: ignore[arg-type]
             except Exception:
                 pass
             # Collect distance metrics when available
@@ -247,8 +270,10 @@ def evaluate_video_with_backend(
             mean_abs_delta = None
         return mean, std, mean_abs_delta
 
-    elbow_mean, elbow_std, elbow_mean_abs_delta = summarize(elbow_series)
-    knee_mean, knee_std, knee_mean_abs_delta = summarize(knee_series)
+    elbow_mean, elbow_std, elbow_mean_abs_delta = summarize(elbow_R_series)
+    left_elbow_mean, left_elbow_std, left_elbow_mean_abs_delta = summarize(elbow_L_series)
+    knee_mean, knee_std, knee_mean_abs_delta = summarize(knee_R_series)
+    left_knee_mean, left_knee_std, left_knee_mean_abs_delta = summarize(knee_L_series)
     shl_mean, shl_std, shl_mean_abs_delta = summarize(shl_series)
     rshl_rpalm_mean, rshl_rpalm_std, rshl_rpalm_mean_abs_delta = summarize(rshl_rpalm_series)
     rshl_rhip_mean, rshl_rhip_std, rshl_rhip_mean_abs_delta = summarize(rshl_rhip_series)
@@ -272,9 +297,15 @@ def evaluate_video_with_backend(
         "elbow_mean": elbow_mean,
         "elbow_std": elbow_std,
         "elbow_mean_abs_delta": elbow_mean_abs_delta,
+        "left_elbow_mean": left_elbow_mean,
+        "left_elbow_std": left_elbow_std,
+        "left_elbow_mean_abs_delta": left_elbow_mean_abs_delta,
         "knee_mean": knee_mean,
         "knee_std": knee_std,
         "knee_mean_abs_delta": knee_mean_abs_delta,
+        "left_knee_mean": left_knee_mean,
+        "left_knee_std": left_knee_std,
+        "left_knee_mean_abs_delta": left_knee_mean_abs_delta,
         "shl_mean": shl_mean,
         "shl_std": shl_std,
         "shl_mean_abs_delta": shl_mean_abs_delta,
@@ -366,9 +397,15 @@ def main() -> None:
         "elbow_mean",
         "elbow_std",
         "elbow_mean_abs_delta",
+        "left_elbow_mean",
+        "left_elbow_std",
+        "left_elbow_mean_abs_delta",
         "knee_mean",
         "knee_std",
         "knee_mean_abs_delta",
+        "left_knee_mean",
+        "left_knee_std",
+        "left_knee_mean_abs_delta",
         "shl_mean",
         "shl_std",
         "shl_mean_abs_delta",
