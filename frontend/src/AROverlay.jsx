@@ -36,8 +36,8 @@ const MOVENET_JOINTS = {
   rightKnee: 14,
 };
 
-export default function AROverlay({ 
-  landmarks, 
+export default function AROverlay({
+  landmarks,
   feedbackLandmarks = [],
   arrowFeedback = [],  // New: structured arrow data from backend
   selectedExercise,
@@ -57,7 +57,7 @@ export default function AROverlay({
 
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
-    
+
     // Clear canvas
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -145,7 +145,7 @@ export default function AROverlay({
       };
 
       const dir = directions[direction] || { dx: 0, dy: -size };
-      
+
       ctx.strokeStyle = color;
       ctx.fillStyle = color;
       ctx.lineWidth = 4;
@@ -186,7 +186,7 @@ export default function AROverlay({
 
       const x = lm.x * canvas.width;
       const y = lm.y * canvas.height;
-      
+
       drawArrow(x, y, arrow.direction, arrow.color || '#facc15', 45);
     });
 
