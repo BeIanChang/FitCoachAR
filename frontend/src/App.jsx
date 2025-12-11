@@ -87,7 +87,7 @@ function App() {
   const [arrowFeedback, setArrowFeedback] = useState([]);  // New: structured arrow data
   const [poseLandmarks, setPoseLandmarks] = useState([]); // State to hold landmarks for the 3D avatar
   const [appState, setAppState] = useState('selection'); // 'selection', 'session_builder', 'calibration_countdown', 'calibrating_live', 'calibration_saving', 'workout', 'summary'
-  
+
   // Session state
   const [sessionConfig, setSessionConfig] = useState([]);
   const [sessionProgress, setSessionProgress] = useState(null);
@@ -125,11 +125,15 @@ function App() {
   const awaitingResponseRef = useRef(false);
 
   const sendCommand = useCallback((payload) => {
-    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
+      console.warn('sendCommand: WebSocket not open, command dropped:', payload);
+      return;
+    }
     const message = { ...payload };
     if (!message.exercise) {
       message.exercise = selectedExerciseRef.current;
     }
+    console.log('sendCommand:', message);
     ws.current.send(JSON.stringify(message));
   }, []);
 
@@ -551,7 +555,7 @@ function App() {
             console.log('rep_count ->', data.rep_count);
             setRepCounter(data.rep_count);
           }
-            
+
           if (data.hasOwnProperty('latency_ms')) setLatencyMs(data.latency_ms);
           if (data.hasOwnProperty('client_ts')) {
             const rtt = performance.now() - data.client_ts;
@@ -567,7 +571,7 @@ function App() {
               phrase => data.feedback.toLowerCase().includes(phrase)
             );
             setFeedbackMessage(isPositive ? '' : data.feedback);  // Hide positive text
-            
+
             const isError = !isPositive && data.feedback.trim() !== '';
             if (isError && repCounterRef.current > 0 && lastErrorRep.current !== repCounterRef.current) {
               setErrorReps(prev => prev + 1);
@@ -588,9 +592,9 @@ function App() {
             setPostRepCommand(data.post_rep_command);
           }
           if (data.feedback_landmarks) setFeedbackLandmarks(data.feedback_landmarks);
-          if (data.calibration_progress){
+          if (data.calibration_progress) {
             setCalibrationProgress(data.calibration_progress);
-          } 
+          }
           if (data.rep_timestamps) setRepTimestamps(data.rep_timestamps);
           if (data.session_progress) setSessionProgress(data.session_progress);
           // Collect form snapshots (from WebSocket directly or from session progress)
@@ -813,20 +817,20 @@ function App() {
   // Send full session data to LLM for summary (with form analysis)
   const sendSessionToLLM = (sessionData) => {
     // Calculate success rate (capped at 1.0 = 100%)
-    const rawSuccessRate = sessionData.total_reps_target > 0 
-      ? sessionData.total_reps_completed / sessionData.total_reps_target 
+    const rawSuccessRate = sessionData.total_reps_target > 0
+      ? sessionData.total_reps_completed / sessionData.total_reps_target
       : 0;
     const successRate = Math.min(1.0, rawSuccessRate);
-    
+
     // Calculate tempo (seconds per rep)
     const avgTempo = sessionData.duration_seconds > 0 && sessionData.total_reps_completed > 0
       ? sessionData.duration_seconds / sessionData.total_reps_completed
       : 0;
-    
+
     // Count total mistakes
     const mistakesObj = sessionData.all_mistakes || {};
     const totalErrors = Object.values(mistakesObj).reduce((sum, count) => sum + count, 0);
-    
+
     // Build summary matching backend SessionData model
     const sessionSummary = {
       total_reps: sessionData.total_reps_completed,
@@ -837,11 +841,11 @@ function App() {
       // Extra fields for context (backend will ignore but useful for display)
       session_details: sessionData
     };
-    
+
     setWorkoutSummary(sessionSummary);
     workoutSummaryRef.current = sessionSummary;
     setAppState('summary');
-    
+
     // Collect all form snapshots from all sets in the session
     const allFormSnapshots = [];
     if (sessionData.sets) {
@@ -851,16 +855,16 @@ function App() {
         }
       });
     }
-    
+
     // If we have form snapshots, fetch form analysis first
     // Use the exercise from the first set, or fallback to a generic name
     const primaryExercise = sessionData.sets?.[0]?.exercise || 'workout';
-    
+
     if (allFormSnapshots.length > 0) {
       fetchFormAnalysisAndSummary(
-        primaryExercise, 
-        allFormSnapshots, 
-        sessionData.total_reps_completed, 
+        primaryExercise,
+        allFormSnapshots,
+        sessionData.total_reps_completed,
         sessionSummary
       );
     } else {
@@ -957,7 +961,7 @@ function App() {
 
     // Save workout data
     saveWorkoutData(finalSummary);
-    
+
     // Fetch form analysis first, then pass to LLM for aligned summary
     if (formSnapshots.length > 0) {
       fetchFormAnalysisAndSummary(selectedExerciseRef.current, formSnapshots, repCounter, finalSummary);
@@ -981,10 +985,10 @@ function App() {
         })
       });
       const analysisData = await analysisResponse.json();
-      
+
       if (analysisData.status === 'success') {
         setFormAnalysis(analysisData.analysis);
-        
+
         // Now fetch LLM summary with the form analysis included
         const enrichedSessionData = {
           ...sessionData,
@@ -993,7 +997,8 @@ function App() {
             good_reps: analysisData.analysis.good_reps,
             total_reps: analysisData.analysis.total_reps,
             top_issues: analysisData.analysis.top_issues,
-            form_states_count: analysisData.analysis.form_states_count
+            form_states_count: analysisData.analysis.form_states_count,
+            snapshots: analysisData.analysis.snapshots
           }
         };
         fetchLlmSummary(enrichedSessionData);
@@ -1197,7 +1202,7 @@ function App() {
               <button onClick={() => handleCriticSubmit('common')}>Apply</button>
             </div>
           </div>
-          
+
           {currentRecords.length === 0 && <p>No calibrations saved yet. Record a new one to personalize thresholds.</p>}
           {currentRecords.length > 0 && (
             <div className="calibration-records-list">
@@ -1328,17 +1333,17 @@ function App() {
             <h2>Calibrate: {selectedExercise === 'bicep_curls' ? 'Bicep Curl' : 'Squat'}</h2>
             <p>Calibration starts in {countdown ?? 0} seconds. Get into your starting position.</p>
             <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px', marginTop: '20px' }}>
-              <video 
-                ref={videoRef} 
+              <video
+                ref={videoRef}
                 onCanPlay={startSendingFrames}
-                autoPlay 
-                playsInline 
-                muted 
+                autoPlay
+                playsInline
+                muted
                 className="camera-feed"
               ></video>
               <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
               {/* 3D Avatar disabled - avatar.glb missing */}
-              <AROverlay 
+              <AROverlay
                 landmarks={poseLandmarks}
                 feedbackLandmarks={feedbackLandmarks}
                 arrowFeedback={arrowFeedback}
@@ -1389,12 +1394,12 @@ function App() {
             </div>
           )}
           <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px', marginTop: '20px' }}>
-            <video 
-              ref={videoRef} 
+            <video
+              ref={videoRef}
               onCanPlay={startSendingFrames}
-              autoPlay 
-              playsInline 
-              muted 
+              autoPlay
+              playsInline
+              muted
               className="camera-feed"
             ></video>
             <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
@@ -1421,18 +1426,18 @@ function App() {
               onClick={finishCalibration}
               disabled={
                 !calibrationProgress ||
-              calibrationProgress.min_angle === null ||
-              calibrationProgress.max_angle === null
-            }
-          >
-            Finish Calibration
-          </button>
-          <button type="button" onClick={cancelCalibration} className="secondary-button">
-            Cancel Calibration
-          </button>
+                calibrationProgress.min_angle === null ||
+                calibrationProgress.max_angle === null
+              }
+            >
+              Finish Calibration
+            </button>
+            <button type="button" onClick={cancelCalibration} className="secondary-button">
+              Cancel Calibration
+            </button>
+          </div>
         </div>
-      </div>
-    )}
+      )}
       {isMediaPipeReady && appState === 'summary' && (
         <LLMFeedback
           summary={llmSummary}
@@ -1459,7 +1464,7 @@ function App() {
             ) : (
               <button onClick={endWorkout} className="reset-button">End Workout</button>
             )}
-            
+
             {/* Session Progress Display */}
             {sessionProgress && (
               <div className="session-progress-bar">
@@ -1475,10 +1480,10 @@ function App() {
                 {sessionProgress.current_set && (
                   <div className="rep-progress">
                     <div className="rep-progress-bar">
-                      <div 
+                      <div
                         className="rep-progress-fill"
-                        style={{ 
-                          width: `${Math.min(100, (sessionProgress.current_set.completed_reps / sessionProgress.current_set.target_reps) * 100)}%` 
+                        style={{
+                          width: `${Math.min(100, (sessionProgress.current_set.completed_reps / sessionProgress.current_set.target_reps) * 100)}%`
                         }}
                       />
                     </div>
@@ -1502,8 +1507,8 @@ function App() {
                 )}
               </div>
             )}
-            
-            <h2>REPS: {sessionProgress?.current_set?.completed_reps ?? repCounter}</h2>
+
+            <h2>REPS: {repCounter}</h2>
             {/* Post-rep coaching command (aligned with form states) */}
             {postRepCommand && (
               <div className="post-rep-command">
@@ -1527,17 +1532,17 @@ function App() {
             )}
           </div>
           <div className="video-container" style={{ position: 'relative', width: '640px', height: '480px' }}>
-            <video 
-              ref={videoRef} 
+            <video
+              ref={videoRef}
               onCanPlay={startSendingFrames}
-              autoPlay 
-              playsInline 
-              muted 
+              autoPlay
+              playsInline
+              muted
               className="camera-feed"
             ></video>
             <canvas ref={canvasRef} style={{ display: 'none' }}></canvas>
             {/* 3D Avatar disabled - avatar.glb missing */}
-            <AROverlay 
+            <AROverlay
               landmarks={poseLandmarks}
               feedbackLandmarks={feedbackLandmarks}
               arrowFeedback={arrowFeedback}
@@ -1592,7 +1597,7 @@ function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset, 
               <p><strong>Good Reps:</strong> {formAnalysis.good_reps} / {formAnalysis.total_reps}</p>
             </div>
           </div>
-          
+
           {formAnalysis.top_issues && formAnalysis.top_issues.length > 0 && (
             <div className="form-issues">
               <h3>Areas to Improve</h3>
@@ -1624,12 +1629,12 @@ function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset, 
                           {isGood ? '✓ Good Form' : '⚠ Needs Work'}
                         </span>
                       </div>
-                      
+
                       {/* Summary */}
                       <p className={`rep-summary ${isGood ? 'good' : 'bad'}`}>
                         {feedback.summary}
                       </p>
-                      
+
                       {/* Detailed feedback from primitives */}
                       {feedback.details && feedback.details.length > 0 && (
                         <div className="rep-details">
@@ -1638,7 +1643,7 @@ function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset, 
                           ))}
                         </div>
                       )}
-                      
+
                       {/* Key highlights/focus areas */}
                       {feedback.highlights && feedback.highlights.length > 0 && (
                         <div className="rep-highlights">
@@ -1691,17 +1696,17 @@ function LLMFeedback({ summary, chatHistory, isLoading, onAskQuestion, onReset, 
   );
 }
 
-function SessionBuilder({ 
-  sessionConfig, 
-  sessionName, 
-  setSessionName, 
-  exercises, 
-  presets, 
-  onAddSet, 
-  onRemoveSet, 
-  onLoadPreset, 
-  onStartSession, 
-  onCancel 
+function SessionBuilder({
+  sessionConfig,
+  sessionName,
+  setSessionName,
+  exercises,
+  presets,
+  onAddSet,
+  onRemoveSet,
+  onLoadPreset,
+  onStartSession,
+  onCancel
 }) {
   const [selectedExercise, setSelectedExercise] = useState(exercises[0]?.id || 'squats');
   const [reps, setReps] = useState(10);
@@ -1715,7 +1720,7 @@ function SessionBuilder({
   return (
     <div className="session-builder">
       <h2>Build Your Session</h2>
-      
+
       {/* Session Name */}
       <div className="session-name-input">
         <label>Session Name:</label>
@@ -1747,8 +1752,8 @@ function SessionBuilder({
       <div className="add-set-form">
         <h3>Add a Set</h3>
         <div className="add-set-controls">
-          <select 
-            value={selectedExercise} 
+          <select
+            value={selectedExercise}
             onChange={(e) => setSelectedExercise(e.target.value)}
           >
             {exercises.map(ex => (
@@ -1781,8 +1786,8 @@ function SessionBuilder({
                   {exercises.find(e => e.id === set.exercise)?.label || set.exercise}
                 </span>
                 <span className="set-reps">{set.reps} reps</span>
-                <button 
-                  onClick={() => onRemoveSet(index)} 
+                <button
+                  onClick={() => onRemoveSet(index)}
                   className="remove-button"
                   title="Remove set"
                 >
@@ -1796,8 +1801,8 @@ function SessionBuilder({
 
       {/* Actions */}
       <div className="session-builder-actions">
-        <button 
-          onClick={onStartSession} 
+        <button
+          onClick={onStartSession}
           className="primary-button"
           disabled={sessionConfig.length === 0}
         >

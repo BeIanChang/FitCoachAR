@@ -12,7 +12,55 @@ All feedback is generated without LLM calls for <100ms latency.
 from typing import Dict, List, Optional, Any
 
 
+from .form_analyzer import FormAnalyzer
+
+# Mapping from form states to concise coaching commands (Moved from RealtimeFormCoach)
+POST_REP_COMMANDS = {
+    "bicep_curls": {
+        "BODY_SWING": ["No swinging!", "Keep body still!", "No momentum!"],
+        "ELBOW_DRIFT": ["Pin elbow!", "Elbow fixed!", "Don't move elbow!"],
+        "INCOMPLETE_RANGE": ["Curl higher!", "Full range!", "All the way up!"],
+        "UNCONTROLLED_LOWER": ["Lower slowly!", "Control descent!", "Don't drop it!"],
+        "WRIST_STRAIN": ["Straight wrist!", "Neutral wrist!", "Don't bend wrist!"],
+        "NO_SQUEEZE": ["Squeeze top!", "Pause at top!", "Hold peak!"],
+        "GOOD_REP": ["Good rep!", "Nice form!", "Keep it up!"],
+    },
+    "squats": {
+        "SHALLOW_SQUAT": ["Go deeper!", "Drop lower!", "Below parallel!"],
+        "KNEE_CAVE": ["Knees out!", "Push knees out!", "No knee cave!"],
+        "FORWARD_LEAN": ["Chest up!", "Stay upright!", "Don't lean!"],
+        "HIP_ASYMMETRY": ["Level hips!", "Balance sides!", "Even push!"],
+        "GOOD_REP": ["Good depth!", "Great squat!", "Perfect form!"],
+    },
+}
+
 class RealtimeCoach:
+    def get_post_rep_command(self, exercise: str, form_states: List[str]) -> Optional[str]:
+        """Get a concise coaching command after a rep completion."""
+        if not form_states:
+            return None
+        
+        # If good rep, occasionally give positive
+        if "GOOD_REP" in form_states and len(form_states) == 1:
+            return self._get_command(exercise, "GOOD_REP")
+            
+        # Priority to errors
+        for state in form_states:
+            if state != "GOOD_REP":
+                return self._get_command(exercise, state)
+        return None
+
+    def _get_command(self, exercise: str, state: str) -> Optional[str]:
+        """Get command variant."""
+        commands = POST_REP_COMMANDS.get(exercise, {}).get(state, [])
+        if not commands:
+            return None
+        key = (exercise, state)
+        idx = self.command_index.get(key, 0)
+        cmd = commands[idx % len(commands)]
+        self.command_index[key] = idx + 1
+        return cmd
+
     """
     Fast, rule-based coaching feedback for realtime workout guidance.
     
@@ -114,10 +162,22 @@ class RealtimeCoach:
         "chest_up": [11, 12],  # Shoulders
     }
     
+    
     def __init__(self):
         self.template_indices: Dict[tuple, int] = {}
         self.last_feedback_type: Optional[str] = None
         self.feedback_cooldown: Dict[str, int] = {}  # Prevent spam
+        
+        # Stability / Hysteresis State
+        self.sticky_error: Optional[str] = None
+        self.sticky_timer: int = 0
+        self.STICKY_DURATION: int = 15  # Frames to hold feedback (~0.5s at 30fps)
+        
+        # Unified Logic Engine
+        self.form_analyzer = FormAnalyzer()
+        
+        # Post-Rep Command State
+        self.command_index: Dict[tuple, int] = {}
     
     def get_text_feedback(
         self,
@@ -127,14 +187,7 @@ class RealtimeCoach:
     ) -> str:
         """
         Get a text tip for the current exercise state.
-        
-        Args:
-            exercise: "bicep_curls" or "squats"
-            error_type: Type of error detected (e.g., "elbow_stability", "go_deeper")
-            metrics: Optional dict with current angle/form metrics
-            
-        Returns:
-            Short coaching tip string
+        Caches the result to prevent text flickering/cycling.
         """
         if error_type is None:
             # No error - return positive feedback
@@ -142,13 +195,27 @@ class RealtimeCoach:
         else:
             key = (exercise, error_type)
         
-        # Fallback to general if specific template not found
-        if key not in self.TEXT_TEMPLATES:
-            key = (exercise, "perfect")
+        # Stable Feedback Logic:
+        # Only cycle the text template if the error type has changed.
+        # This prevents the text from changing every single frame (30fps cycling).
+        if error_type != self.last_feedback_type:
+            self.last_feedback_type = error_type
+            
+            # Generate new variant
             if key not in self.TEXT_TEMPLATES:
-                return ""
+                key = (exercise, "perfect")
+                if key not in self.TEXT_TEMPLATES:
+                    self.current_tip = ""
+                else:
+                    self.current_tip = self._get_template_variant(key)
+            else:
+                self.current_tip = self._get_template_variant(key)
         
-        return self._get_template_variant(key)
+        # Return the cached tip (or empty if first run and logic failed, but init handles that)
+        if not hasattr(self, "current_tip"):
+             self.current_tip = ""
+             
+        return self.current_tip
     
     def get_arrow_feedback(
         self,
@@ -218,34 +285,62 @@ class RealtimeCoach:
         current_angle: float,
         target_angle: float,
         elbow_drift: float = 0.0,
-        stability_threshold: float = 0.05
+        stability_threshold: float = 0.05  # Kept for signature compatibility but ignored
     ) -> Optional[str]:
         """
-        Analyze form metrics and return error type if any.
+        Analyze form metrics using unified FormCode logic.
+        Includes hysteresis to prevent feedback flickering.
         
         Args:
             exercise: Current exercise
             current_angle: Current joint angle
             target_angle: Target/calibrated angle
             elbow_drift: Horizontal elbow movement (for curls)
-            stability_threshold: Max allowed drift
+            stability_threshold: Ignored (uses FormCode config)
             
         Returns:
             Error type string or None if form is good
         """
+        instant_error = None
+        
         if exercise == "bicep_curls":
-            # Check elbow stability
-            if elbow_drift > stability_threshold:
-                return "elbow_stability"
-            # Check curl depth (angle should be small at top)
-            # This would need phase detection to work properly
+            # Priority 1: Check elbow stability (Safety/Mechanics)
+            # Unified Logic: Use 'elbow_position' FormCode
+            drift_category = self.form_analyzer.categorize_form_code(
+                "bicep_curls", "elbow_position", elbow_drift
+            )
+            
+            if drift_category in ["slight_drift", "major_drift"]:
+                instant_error = "elbow_stability"
+                
+            # Priority 2: Check curl depth (Range of Motion)
+            # Only checked if stability is good.
             
         elif exercise == "squats":
-            # Check squat depth
-            if current_angle > target_angle + 20:  # Not deep enough
-                return "go_deeper"
+            # Priority 1: Check squat depth (Primary metric)
+            # Unified Logic: Use 'squat_depth' FormCode
+            depth_category = self.form_analyzer.categorize_form_code(
+                "squats", "squat_depth", current_angle
+            )
+            
+            # Note: For squats, 'shallow' is bad, 'deep'/'parallel' are good.
+            if depth_category == "shallow":
+                instant_error = "go_deeper"
         
-        return None
+        # --- Hysteresis Logic ---
+        if instant_error:
+            # New error detected: Update sticky state and refresh timer
+            self.sticky_error = instant_error
+            self.sticky_timer = self.STICKY_DURATION
+            return instant_error
+        else:
+            # No immediate error: Check if we should hold the previous error
+            if self.sticky_timer > 0:
+                self.sticky_timer -= 1
+                return self.sticky_error
+            else:
+                self.sticky_error = None
+                return None
     
     def _get_template_variant(self, key: tuple) -> str:
         """Cycle through template variants to avoid repetition."""
