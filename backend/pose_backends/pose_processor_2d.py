@@ -16,11 +16,9 @@ from calibration_v2 import (
     CalibrationStore,
 )
 from rep_counter_v2 import NormalizedRepCounter
-from form_checker import FormChecker
 from kinematics import KinematicFeatureExtractor
 from session import WorkoutSession, FormSnapshot
-from coaches import FormAnalyzer
-from coaches.realtime_form_coach import get_realtime_form_coach
+from coaches import FormAnalyzer, FormChecker, RealtimeCoach
 
 from filters import KalmanLandmarkSmoother
 from .base import PoseBackend, PoseEstimator
@@ -59,7 +57,7 @@ class PoseProcessor(PoseBackend):
         
         # Form analysis
         self.form_analyzer = FormAnalyzer()
-        self.realtime_form_coach = get_realtime_form_coach()
+        self.realtime_coach = RealtimeCoach()
         
         # Rep tracking state
         self.total_reps = 0
@@ -213,7 +211,7 @@ class PoseProcessor(PoseBackend):
                 if self.active_session and self.active_session.current_set:
                     self.active_session.current_set.add_form_snapshot(snapshot)
 
-                command = self.realtime_form_coach.get_post_rep_command(
+                command = self.realtime_coach.get_post_rep_command(
                     exercise, snapshot.form_states
                 )
                 if command:

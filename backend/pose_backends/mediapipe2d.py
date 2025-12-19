@@ -14,7 +14,6 @@ import numpy as np
 from filters import KalmanLandmarkSmoother
 from kinematics import AngularFeatureExtractor
 from coaches import RealtimeCoach, FormAnalyzer
-from coaches.realtime_form_coach import get_realtime_form_coach
 from calibration_store import store, new_record, CalibrationRecord
 from session import WorkoutSession, FormSnapshot
 from .base import PoseBackend
@@ -43,8 +42,8 @@ class MediaPipe2DPoseBackend(PoseBackend):
     name = "mediapipe_2d"
     dimension_hint = "2.5D"
 
-    BICEP_CANONICAL = {"extended": 160.0, "contracted": 30.0}
-    SQUAT_CANONICAL = {"up": 160.0, "down": 50.0}
+    BICEP_CANONICAL = {"extended": 160.0, "contracted": 65.0}
+    SQUAT_CANONICAL = {"up": 165.0, "down": 85.0}
     CALIBRATION_FREEZE_SECONDS = 2.0
 
     def __init__(self):
@@ -235,17 +234,18 @@ class MediaPipe2DPoseBackend(PoseBackend):
         self.post_rep_command: Optional[str] = None  # Coaching command after rep
         self.post_rep_command_frames: int = 0  # How long to show the command
         
-        # Realtime form coach (aligned with form states)
-        self.realtime_form_coach = get_realtime_form_coach()
+        # Reset realtime coach
+        if hasattr(self, "realtime_coach"):
+            self.realtime_coach.reset()
         
         # Rep buffer for form analysis
         self._init_rep_buffer()
 
         if reset_calibration:
-            self.arm_extended_angle = 160
-            self.arm_contracted_angle = 30
-            self.squat_up_angle = 160
-            self.squat_down_angle = 50
+            self.arm_extended_angle = self.BICEP_CANONICAL["extended"]
+            self.arm_contracted_angle = self.BICEP_CANONICAL["contracted"]
+            self.squat_up_angle = self.SQUAT_CANONICAL["up"]
+            self.squat_down_angle = self.SQUAT_CANONICAL["down"]
         else:
             # Preserve personalized calibration between workouts.
             self.arm_extended_angle = getattr(self, "arm_extended_angle", 160)
@@ -406,7 +406,7 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 if self.active_session and self.active_session.current_set:
                     self.active_session.current_set.add_form_snapshot(snapshot)
 
-                command = self.realtime_form_coach.get_post_rep_command(
+                command = self.realtime_coach.get_post_rep_command(
                     exercise, snapshot.form_states
                 )
                 if command:
@@ -979,6 +979,9 @@ class MediaPipe2DPoseBackend(PoseBackend):
                     in_up_position = right_elbow_angle < (self.arm_contracted_angle + 20)
 
                 if self.curl_state == "DOWN":
+                    in_down_position = right_elbow_angle > (self.arm_extended_angle - 20) # Check if we are actually down
+
+                if self.curl_state == "DOWN":
                     self.elbow_baseline_x = right_elbow_x
                     # Start new rep buffer
                     if not self.rep_buffer["in_rep"]:
@@ -1091,13 +1094,39 @@ class MediaPipe2DPoseBackend(PoseBackend):
                 error_type=self.realtime_coach._detect_error_type(self.selected_exercise, feedback)
             )
 
+        # Always run continuous analysis to detect safety issues (prioritized)
+        analysis_error = None
+        if self.selected_exercise == "bicep_curls":
+            # Check metrics for curls
+            analysis_error = self.realtime_coach.analyze_form(
+                self.selected_exercise,
+                current_angle=right_elbow_angle,
+                target_angle=self.arm_contracted_angle,
+                elbow_drift=abs(right_elbow_x - self.elbow_baseline_x) if self.elbow_baseline_x else 0.0
+            )
+        elif self.selected_exercise == "squats" and self.squat_state == "DOWN":
+            # Check metrics for squats (depth)
+            analysis_error = self.realtime_coach.analyze_form(
+                self.selected_exercise,
+                current_angle=right_knee_angle,
+                target_angle=self.squat_down_angle
+            )
+        
+        # If a safety error is detected, it overrides generic state feedback (e.g., "Down")
+        if analysis_error:
+            feedback = self.realtime_coach.get_text_feedback(self.selected_exercise, analysis_error)
+        
         # Build arrow feedback for visual coaching using RealtimeCoach
         arrow_feedback = self.realtime_coach.get_arrow_feedback(
             self.selected_exercise, feedback, landmarks
         )
 
+        # Determine generic rep count for frontend display
+        current_rep_count = self.curl_counter if (self.selected_exercise == "bicep_curls" or not self.selected_exercise) else self.squat_counter
+
         data_to_send = {
             "landmarks": landmarks_data,
+            "rep_count": current_rep_count,
             "left_elbow_angle": left_elbow_angle,
             "right_elbow_angle": right_elbow_angle,
             "curl_counter": self.curl_counter,
